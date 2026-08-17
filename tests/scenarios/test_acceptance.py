@@ -354,3 +354,91 @@ async def test_repeated_natural_request_does_not_create_second_appointment(sut):
     assert "未重复创建" in second["current_reply"]
     matches = [item for item in sut.clinic_data.appointments.values() if item["patient_id"] == "P1001"]
     assert len(matches) == 1
+
+
+@pytest.mark.asyncio
+async def test_follow_up_recommends_cleaning_and_guides_to_date_selection(sut):
+    """随访/召回最小垂直切片：患者事实 last_cleaning_date 距今约 6 个月，应推荐洗牙复查并引导选日期，全程无写操作。"""
+    conversation = await sut.conversation()
+    response = await sut.send(conversation, "我想复查洗牙", "msg-follow-up")
+    assert response.status_code == 202
+    run = response.json()["run"]
+
+    assert run["intent"] == "FOLLOW_UP"
+    assert run["workflow_step"] == "COLLECTING_REQUIREMENTS"
+    assert run["run_status"] == "WAITING_PATIENT"
+    assert run["action_required"] == "DATE_SELECTION"
+    assert run["service_item_name"] == "洗牙"
+    assert "6 个月" in run["current_reply"]
+    assert run["candidate_dates"] == [
+        {"date": "2026-08-15", "available_slot_count": 2},
+        {"date": "2026-08-16", "available_slot_count": 1},
+    ]
+    assert not [item for item in sut.store.tool_executions if item.tool_name == "create_appointment"]
+    assert any(event.event == "follow_up_recommendation_made" for event in sut.store.get_trace(run["run_id"]))
+
+
+@pytest.mark.asyncio
+async def test_follow_up_not_yet_due_does_not_recommend(sut):
+    """距上次洗牙不足 5 个月时，随访应给出确定性降级回复，不预填服务也不触发写操作。"""
+    sut.patient_data.patients["P1001"]["facts"] = [
+        {"id": "F1002", "fact_type": "last_cleaning_date", "value": "2026-08-01", "source": "synthetic_patient_ops"}
+    ]
+    conversation = await sut.conversation()
+    run = (await sut.send(conversation, "我想复查", "msg-follow-up-early")).json()["run"]
+
+    assert run["intent"] == "FOLLOW_UP"
+    assert run["action_required"] == "NONE"
+    assert run["service_item_name"] is None
+    assert "暂未到常规复查周期" in run["current_reply"]
+    assert sut.store.tool_executions == []
+    assert any(event.event == "follow_up_not_yet_due" for event in sut.store.get_trace(run["run_id"]))
+
+
+@pytest.mark.asyncio
+async def test_follow_up_without_facts_degrades_gracefully(sut):
+    """患者没有可用事实时，随访回复应优雅降级而非报错。"""
+    sut.patient_data.patients["P1001"]["facts"] = []
+    conversation = await sut.conversation()
+    run = (await sut.send(conversation, "我想回访", "msg-follow-up-no-facts")).json()["run"]
+
+    assert run["intent"] == "FOLLOW_UP"
+    assert run["action_required"] == "NONE"
+    assert "没有找到适合您的复查建议" in run["current_reply"]
+    assert sut.store.tool_executions == []
+    assert any(event.event == "follow_up_no_applicable_fact" for event in sut.store.get_trace(run["run_id"]))
+
+
+@pytest.mark.asyncio
+async def test_follow_up_can_complete_full_booking_through_existing_pipeline(sut):
+    """随访推荐后，患者可沿既有 日期→时段→确认 确定性管线完成洗牙预约。"""
+    conversation = await sut.conversation()
+    follow_up = (await sut.send(conversation, "复查洗牙", "msg-follow-up-full")).json()["run"]
+    assert follow_up["action_required"] == "DATE_SELECTION"
+
+    selected_date = await sut.client.post(
+        f"/api/v1/runs/{follow_up['run_id']}/date-selection",
+        json={"date": "2026-08-16"},
+        headers=sut.headers("follow-up-date", follow_up["state_version"]),
+    )
+    assert selected_date.status_code == 200
+    slot_run = selected_date.json()
+    assert slot_run["action_required"] == "SLOT_SELECTION"
+    assert [slot["id"] for slot in slot_run["candidate_slots"]] == ["S1003"]
+
+    selected_slot = await sut.client.post(
+        f"/api/v1/runs/{follow_up['run_id']}/slot-selection",
+        json={"slot_id": "S1003", "slot_version": slot_run["candidate_slots"][0]["version"]},
+        headers=sut.headers("follow-up-slot", slot_run["state_version"]),
+    )
+    assert selected_slot.status_code == 200
+    confirmation_run = selected_slot.json()
+    assert confirmation_run["action_required"] == "CONFIRMATION"
+
+    confirmed = (await sut.confirm(confirmation_run, "follow-up-confirm")).json()
+    assert confirmed["core_business_status"] == "SUCCEEDED"
+    assert confirmed["writeback_status"] == "PENDING"
+    matches = [item for item in sut.clinic_data.appointments.values() if item["patient_id"] == "P1001"]
+    assert len(matches) == 1
+    assert matches[0]["service_item_id"] == "SV-CLEANING"
+    assert matches[0]["status"] == "CONFIRMED"

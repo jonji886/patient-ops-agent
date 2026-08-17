@@ -7,7 +7,7 @@
 | 数据集版本 | `synthetic-v0.1` |
 | Prompt / Provider 版本 | `understanding-v1` / deterministic rule-based CI provider |
 | 业务时钟 | `2026-08-14T09:00:00+08:00` |
-| 测试总数 | 101 |
+| 测试总数 | 109 |
 | 覆盖范围 | Unit / State / Policy、NLU Golden、跨服务 Integration、E2E / Failure Scenarios、API Contract |
 
 ## 结果
@@ -18,7 +18,7 @@
 python3 -m pytest -q
 ```
 
-结果：101 条全部通过。SPEC AC-01 至 AC-09 均有独立自动化场景；另有 10 条真实 API 浏览器 E2E 通过。
+结果：109 条全部通过。SPEC AC-01 至 AC-09 均有独立自动化场景；另有 10 条真实 API 浏览器 E2E 通过。
 
 | 指标 | 结果 | 目标 |
 |---|---:|---:|

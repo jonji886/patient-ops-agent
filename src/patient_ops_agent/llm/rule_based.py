@@ -51,6 +51,8 @@ class RuleBasedUnderstandingProvider(UnderstandingProvider):
     def _intent(self, text: str) -> Intent:
         if any(word in text for word in ("人工", "客服", "转接")):
             return Intent.REQUEST_HUMAN
+        if any(word in text for word in ("复查", "随访", "回访", "复诊", "该洗牙了", "建议洗牙")):
+            return Intent.FOLLOW_UP
         if any(phrase in text for phrase in ("有哪些日期可约", "哪些日期可约", "还有什么时间", "哪些时间可约", "看看可约", "还有号源", "换一天", "换个日期")):
             return Intent.QUERY_SLOT_AVAILABILITY
         if any(word in text for word in ("算了", "不约了", "停止流程")):
@@ -101,4 +103,6 @@ class RuleBasedUnderstandingProvider(UnderstandingProvider):
             return ProposedAction.SEARCH_ALTERNATIVE_SLOTS
         if intent is Intent.CREATE_APPOINTMENT:
             return ProposedAction.COLLECT_REQUIREMENTS if missing else ProposedAction.SEARCH_SLOTS
+        if intent is Intent.FOLLOW_UP:
+            return ProposedAction.RECOMMEND_SERVICE
         return ProposedAction.NONE

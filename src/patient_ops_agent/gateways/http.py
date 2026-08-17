@@ -38,6 +38,14 @@ class PatientOpsGateway:
         response = await self.client.get(f"/api/v1/patients/{patient_id}/contact-consents/{channel}")
         _raise(response); return response.json()
 
+    async def facts(self, patient_id: str) -> List[Dict[str, Any]]:
+        response = await self.client.get(f"/api/v1/patients/{patient_id}/facts")
+        _raise(response); return response.json()
+
+    async def next_best_actions(self, patient_id: str) -> List[Dict[str, Any]]:
+        response = await self.client.get(f"/api/v1/patients/{patient_id}/next-best-actions")
+        _raise(response); return response.json()
+
     async def writeback(self, payload: Dict[str, Any], key: str) -> Dict[str, Any]:
         response = await self.client.post("/api/v1/agent-results", json=payload, headers={"Idempotency-Key": key})
         _raise(response); return response.json()

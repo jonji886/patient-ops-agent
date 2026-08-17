@@ -121,6 +121,9 @@ class AgentWorkflow:
                             details={"security_event": "cross_patient_resource_request"})
                 return run
             return await self._query_appointments(run, True, trace_id)
+        if intent is Intent.FOLLOW_UP:
+            run.intent = intent.value
+            return await self._handle_follow_up(run, trace_id)
         run.intent = intent.value
         run.workflow_step = WorkflowStep.COLLECTING_REQUIREMENTS
         run.run_status = AgentRunStatus.WAITING_PATIENT
@@ -192,6 +195,61 @@ class AgentWorkflow:
             return saved
         return await self._search_slots(run, trace_id)
 
+    async def _handle_follow_up(self, run: AgentRun, trace_id: str) -> AgentRun:
+        """Follow-up / recall slice: recommend a cleaning review from patient facts.
+
+        读取 Patient Ops 的患者事实（last_cleaning_date），若距上次洗牙超过 5 个月则
+        预填洗牙服务并引导到既有日期选择管线；若未到期或缺少事实，则给出确定性
+        降级回复，不擅自发起任何预约写操作。
+        """
+        facts = await self.patient_ops.facts(run.patient_id)
+        cleaning_fact = next((item for item in facts if item.get("fact_type") == "last_cleaning_date"), None)
+        if not cleaning_fact or not cleaning_fact.get("value"):
+            run.workflow_step = WorkflowStep.COLLECTING_REQUIREMENTS
+            run.run_status = AgentRunStatus.WAITING_PATIENT
+            run.action_required = "NONE"
+            run.current_reply = "暂时没有找到适合您的复查建议。您可以告诉我需要预约的服务和日期，我来帮您安排。"
+            saved = self._save(run)
+            self._trace(saved, trace_id, "follow_up_no_applicable_fact", "UNDERSTANDING_REQUEST",
+                        status="NO_APPLICABLE_FACT", details={"patient_id": run.patient_id})
+            return saved
+        try:
+            last_date = date.fromisoformat(str(cleaning_fact["value"]))
+        except (TypeError, ValueError):
+            run.current_reply = "暂时没有找到适合您的复查建议。您可以告诉我需要预约的服务和日期，我来帮您安排。"
+            saved = self._save(run)
+            self._trace(saved, trace_id, "follow_up_invalid_fact", "UNDERSTANDING_REQUEST",
+                        status="NO_APPLICABLE_FACT", details={"patient_id": run.patient_id})
+            return saved
+        today = self.clock.now().date()
+        months_ago = (today.year - last_date.year) * 12 + (today.month - last_date.month)
+        if today.day < last_date.day:
+            months_ago -= 1
+        if months_ago < 5:
+            run.workflow_step = WorkflowStep.COLLECTING_REQUIREMENTS
+            run.run_status = AgentRunStatus.WAITING_PATIENT
+            run.action_required = "NONE"
+            run.current_reply = f"您上次洗牙是 {last_date.isoformat()}，距今约 {months_ago} 个月，暂未到常规复查周期。"
+            saved = self._save(run)
+            self._trace(saved, trace_id, "follow_up_not_yet_due", "UNDERSTANDING_REQUEST",
+                        status="NOT_YET_DUE", details={"last_cleaning_date": last_date.isoformat()})
+            return saved
+        run.service_item_id = "SV-CLEANING"
+        run.service_item_name = "洗牙"
+        clinics = await self.clinic.clinics()
+        if len(clinics) == 1:
+            run.clinic_id = clinics[0]["id"]
+        self._trace(run, trace_id, "follow_up_recommendation_made", "UNDERSTANDING_REQUEST",
+                    status="RECOMMENDED", details={
+                        "service_item_id": "SV-CLEANING",
+                        "last_cleaning_date": last_date.isoformat(),
+                        "months_ago": months_ago,
+                    })
+        return await self._present_available_dates(
+            run, trace_id,
+            reply_override=f"您上次洗牙是 {last_date.isoformat()}，距今约 {months_ago} 个月，建议安排一次复查。请选择可约日期：",
+        )
+
     async def _present_service_selection(self, run: AgentRun, trace_id: str, reply_override: Optional[str] = None) -> AgentRun:
         """Project active Clinic Core services when the booking service is still unknown."""
 
@@ -216,7 +274,8 @@ class AgentWorkflow:
                     details={"service_item_ids": [item["id"] for item in saved.candidate_service_items]})
         return saved
 
-    async def _present_available_dates(self, run: AgentRun, trace_id: str) -> AgentRun:
+    async def _present_available_dates(self, run: AgentRun, trace_id: str,
+                                       reply_override: Optional[str] = None) -> AgentRun:
         """Project only dates with real available slots for the selected service.
 
         当所选服务项目未来 7 天内没有任何可约日期时，不停留在死胡同，而是清空已选
@@ -259,7 +318,7 @@ class AgentWorkflow:
         run.workflow_step = WorkflowStep.COLLECTING_REQUIREMENTS
         run.run_status = AgentRunStatus.WAITING_PATIENT
         run.action_required = "DATE_SELECTION"
-        run.current_reply = f"已选择{service_name}，请选择可约日期。"
+        run.current_reply = reply_override or f"已选择{service_name}，请选择可约日期。"
         saved = self._save(run)
         self._trace(saved, trace_id, "available_dates_presented", "SEARCHING_SLOTS",
                     tool_name="search_available_slots", status="SUCCEEDED",

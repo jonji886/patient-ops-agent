@@ -1,0 +1,196 @@
+openapi: 3.0.3
+info:
+  title: Patient Ops Platform Mock API
+  version: 0.1.0
+  description: Patient facts, consent, next-best-action, and Agent result writeback.
+servers:
+  - url: http://localhost:8001
+paths:
+  /api/v1/patients/{patient_id}/context:
+    get:
+      summary: Get the minimum patient context for a Run
+      security: [{serviceAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/TraceId'
+        - name: patient_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Patient context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatientContext'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+
+  /api/v1/patients/{patient_id}/facts:
+    get:
+      summary: Get patient facts
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Patient facts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PatientFact'
+
+  /api/v1/patients/{patient_id}/contact-consents/{channel}:
+    get:
+      summary: Get contact consent for a channel
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: channel
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Contact consent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactConsent'
+
+  /api/v1/patients/{patient_id}/next-best-actions:
+    get:
+      summary: Get suggested next-best-actions
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Next-best-actions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NextBestAction'
+
+  /api/v1/agent-results:
+    post:
+      summary: Idempotently write an Agent result
+      security: [{serviceAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/TraceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentResultRequest'
+      responses:
+        '200':
+          description: Result written or idempotently replayed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentResultResponse'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/operations/{operation_id}:
+    get:
+      summary: Read a writeback Operation result
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Operation result
+          content:
+            application/json:
+              schema:
+                $ref: './common.yaml#/components/schemas/OperationResult'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: ServiceToken
+  schemas:
+    PatientContext:
+      type: object
+      required: [patient_id, display_name, preferred_channel, status]
+      properties:
+        patient_id: {type: string}
+        display_name: {type: string}
+        preferred_channel: {type: string}
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    PatientFact:
+      type: object
+      required: [id, patient_id, fact_type, value, source, observed_at]
+      properties:
+        id: {type: string}
+        patient_id: {type: string}
+        fact_type: {type: string}
+        value: {}
+        source: {type: string}
+        observed_at: {type: string, format: date-time}
+    ContactConsent:
+      type: object
+      required: [patient_id, channel, allowed]
+      properties:
+        patient_id: {type: string}
+        channel: {type: string}
+        allowed: {type: boolean}
+        effective_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, nullable: true}
+    NextBestAction:
+      type: object
+      required: [id, patient_id, action_type, reason_code, status]
+      properties:
+        id: {type: string}
+        patient_id: {type: string}
+        action_type: {type: string}
+        reason_code: {type: string}
+        status:
+          type: string
+          enum: [PROPOSED, ACCEPTED, COMPLETED, EXPIRED]
+        created_at: {type: string, format: date-time}
+    AgentResultRequest:
+      type: object
+      required: [run_id, operation_id, patient_id, task_type, task_status]
+      properties:
+        run_id: {type: string}
+        operation_id: {type: string}
+        patient_id: {type: string}
+        task_type: {type: string}
+        task_status: {type: string}
+        business_id: {type: string, nullable: true}
+        occurred_at: {type: string, format: date-time}
+    AgentResultResponse:
+      allOf:
+        - $ref: '#/components/schemas/AgentResultRequest'
+        - type: object
+          required: [idempotent_replay]
+          properties:
+            result_id: {type: string}
+            idempotent_replay: {type: boolean}

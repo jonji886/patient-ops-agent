@@ -1,0 +1,293 @@
+openapi: 3.0.3
+info:
+  title: Clinic Core Mock API
+  version: 0.1.0
+  description: Clinics, services, slots, appointments, and idempotent business writes.
+servers:
+  - url: http://localhost:8002
+paths:
+  /api/v1/clinics:
+    get:
+      summary: List active clinics
+      security: [{serviceAuth: []}]
+      responses:
+        '200':
+          description: Clinics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Clinic'
+
+  /api/v1/service-items:
+    get:
+      summary: List active service items
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: clinic_id
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Service items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ServiceItem'
+
+  /api/v1/doctors:
+    get:
+      summary: List doctors, optionally scoped to a clinic
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: clinic_id
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Doctors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Doctor'
+
+  /api/v1/slots:
+    get:
+      summary: Search available slots
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: clinic_id
+          in: query
+          schema: {type: string}
+        - name: service_item_id
+          in: query
+          required: true
+          schema: {type: string}
+        - name: doctor_id
+          in: query
+          schema: {type: string}
+        - name: start_date
+          in: query
+          required: true
+          schema: {type: string, format: date}
+        - name: end_date
+          in: query
+          schema: {type: string, format: date}
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [MORNING, AFTERNOON, EVENING]
+      responses:
+        '200':
+          description: Candidate slots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: './common.yaml#/components/schemas/Slot'
+
+  /api/v1/patients/{patient_id}/appointments:
+    get:
+      summary: List appointments owned by a patient
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: future_only
+          in: query
+          schema: {type: boolean, default: true}
+      responses:
+        '200':
+          description: Patient appointments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: './common.yaml#/components/schemas/Appointment'
+
+  /api/v1/appointments/{appointment_id}:
+    get:
+      summary: Get an appointment by ID
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: appointment_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Appointment
+          content:
+            application/json:
+              schema:
+                $ref: './common.yaml#/components/schemas/Appointment'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+
+  /api/v1/appointments:
+    post:
+      summary: Create an appointment idempotently
+      security: [{serviceAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/TraceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAppointmentRequest'
+      responses:
+        '201':
+          description: Appointment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAppointmentResponse'
+        '200':
+          description: Idempotent replay of the original result
+          headers:
+            Idempotent-Replay:
+              schema: {type: boolean}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAppointmentResponse'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/appointments/{appointment_id}/cancel:
+    post:
+      summary: Cancel an owned appointment idempotently
+      security: [{serviceAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './common.yaml#/components/parameters/TraceId'
+        - name: appointment_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelAppointmentRequest'
+      responses:
+        '200':
+          description: Cancelled appointment or idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelAppointmentResponse'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/operations/{operation_id}:
+    get:
+      summary: Reconcile an unknown write result
+      security: [{serviceAuth: []}]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Operation result
+          content:
+            application/json:
+              schema:
+                $ref: './common.yaml#/components/schemas/OperationResult'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: ServiceToken
+  schemas:
+    Clinic:
+      type: object
+      required: [id, name, timezone, status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        timezone: {type: string}
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    ServiceItem:
+      type: object
+      required: [id, name, duration_minutes, status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        department_id: {type: string, nullable: true}
+        duration_minutes: {type: integer, minimum: 1}
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    Doctor:
+      type: object
+      required: [id, name, clinic_id, status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        clinic_id: {type: string}
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    CreateAppointmentRequest:
+      type: object
+      required: [operation_id, patient_id, clinic_id, service_item_id, doctor_id, slot_id, expected_slot_version]
+      properties:
+        operation_id: {type: string}
+        patient_id: {type: string}
+        clinic_id: {type: string}
+        service_item_id: {type: string}
+        doctor_id: {type: string}
+        slot_id: {type: string}
+        expected_slot_version: {type: integer, minimum: 1}
+    CreateAppointmentResponse:
+      type: object
+      required: [operation_id, appointment_id, status, slot_id, appointment_version, idempotent_replay]
+      properties:
+        operation_id: {type: string}
+        appointment_id: {type: string}
+        status:
+          type: string
+          enum: [CONFIRMED]
+        slot_id: {type: string}
+        appointment_version: {type: integer, minimum: 1}
+        idempotent_replay: {type: boolean}
+    CancelAppointmentRequest:
+      type: object
+      required: [operation_id, patient_id, expected_appointment_version]
+      properties:
+        operation_id: {type: string}
+        patient_id: {type: string}
+        expected_appointment_version: {type: integer, minimum: 1}
+    CancelAppointmentResponse:
+      type: object
+      required: [operation_id, appointment_id, status, appointment_version, idempotent_replay]
+      properties:
+        operation_id: {type: string}
+        appointment_id: {type: string}
+        status:
+          type: string
+          enum: [CANCELLED]
+        appointment_version: {type: integer, minimum: 1}
+        idempotent_replay: {type: boolean}

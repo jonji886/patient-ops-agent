@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: patient_ops
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      AGENT_DB_PASSWORD: ${AGENT_DB_PASSWORD:?set AGENT_DB_PASSWORD in .env}
+      PATIENT_OPS_DB_PASSWORD: ${PATIENT_OPS_DB_PASSWORD:?set PATIENT_OPS_DB_PASSWORD in .env}
+      CLINIC_CORE_DB_PASSWORD: ${CLINIC_CORE_DB_PASSWORD:?set CLINIC_CORE_DB_PASSWORD in .env}
+    volumes:
+      - patient_ops_pg:/var/lib/postgresql/data
+      - ./infra/postgres/init.sh:/docker-entrypoint-initdb.d/000_init.sh:ro
+      - ./infra/postgres:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d patient_ops"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  patient-ops-mock:
+    build: .
+    command: ["python", "-m", "uvicorn", "patient_ops_agent.mocks.patient_main:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      PATIENT_OPS_DATABASE_URL: postgresql+psycopg://patient_ops_app:${PATIENT_OPS_DB_PASSWORD}@postgres:5432/patient_ops
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  clinic-core-mock:
+    build: .
+    command: ["python", "-m", "uvicorn", "patient_ops_agent.mocks.clinic_main:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      CLINIC_CORE_DATABASE_URL: postgresql+psycopg://clinic_core_app:${CLINIC_CORE_DB_PASSWORD}@postgres:5432/patient_ops
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  agent-api:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      AGENT_DATABASE_URL: postgresql+psycopg://agent_app:${AGENT_DB_PASSWORD}@postgres:5432/patient_ops
+      PATIENT_OPS_BASE_URL: http://patient-ops-mock:8001
+      CLINIC_CORE_BASE_URL: http://clinic-core-mock:8002
+      ACTOR_TOKEN_SIGNING_SECRET: ${ACTOR_TOKEN_SIGNING_SECRET:?set ACTOR_TOKEN_SIGNING_SECRET in .env}
+      LLM_PROVIDER: ${LLM_PROVIDER:-fake}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-}
+    depends_on:
+      patient-ops-mock: {condition: service_started}
+      clinic-core-mock: {condition: service_started}
+
+  agent-worker:
+    build: .
+    command: ["patient-ops-worker"]
+    environment:
+      AGENT_DATABASE_URL: postgresql+psycopg://agent_app:${AGENT_DB_PASSWORD}@postgres:5432/patient_ops
+      PATIENT_OPS_BASE_URL: http://patient-ops-mock:8001
+    depends_on:
+      agent-api: {condition: service_started}
+
+  web:
+    build: ./web
+    ports: ["5173:80"]
+    depends_on:
+      agent-api: {condition: service_started}
+
+volumes:
+  patient_ops_pg:

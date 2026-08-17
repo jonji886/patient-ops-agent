@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "patient-ops-agent"
+version = "0.1.0"
+description = "A stateful patient appointment operations agent"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "langgraph>=0.2,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.6,<3",
+  "PyYAML>=6.0,<7",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "pytest-asyncio>=0.24,<2",
+]
+postgres = [
+  "psycopg[binary]>=3.2,<4",
+]
+
+[project.scripts]
+patient-ops-agent = "patient_ops_agent.main:run"
+patient-ops-worker = "patient_ops_agent.worker:run"
+patient-ops-token = "patient_ops_agent.token_cli:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

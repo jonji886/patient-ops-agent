@@ -1,0 +1,40 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Web
+node_modules/
+web/test-results/
+web/playwright-report/
+web/blob-report/
+*.map
+web/dist/
+
+# Test and tooling caches
+.pytest_cache/
+var/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local runtime data
+runtime/
+tmp/
+*.log
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/

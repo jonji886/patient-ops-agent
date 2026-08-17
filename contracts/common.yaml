@@ -1,0 +1,167 @@
+openapi: 3.0.3
+info:
+  title: Patient Ops Agent Common Contracts
+  version: 0.1.0
+  description: Shared schemas for the Patient Ops Agent MVP.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: SyntheticActorToken
+
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: true
+      description: Stable identifier for one client command; duplicate commands replay the original result.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    StateVersion:
+      name: X-State-Version
+      in: header
+      required: false
+      description: Optimistic-lock version of the current Agent Run.
+      schema:
+        type: integer
+        minimum: 0
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable key for one external write Operation and all its retries.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    TraceId:
+      name: X-Trace-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 128
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message, retryable, outcome]
+      properties:
+        code:
+          type: string
+          enum:
+            - PATIENT_NOT_FOUND
+            - APPOINTMENT_NOT_FOUND
+            - SERVICE_ITEM_NOT_FOUND
+            - SLOT_NOT_FOUND
+            - SLOT_OCCUPIED
+            - SLOT_VERSION_CONFLICT
+            - INVALID_REQUEST
+            - UNAUTHENTICATED
+            - FORBIDDEN
+            - IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST
+            - RATE_LIMITED
+            - TIMEOUT
+            - UPSTREAM_UNAVAILABLE
+            - STATE_VERSION_CONFLICT
+            - INTERNAL_ERROR
+        message:
+          type: string
+        retryable:
+          type: boolean
+        outcome:
+          type: string
+          enum: [NOT_EXECUTED, EXECUTED, UNKNOWN]
+        correlation_id:
+          type: string
+          nullable: true
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    OperationResult:
+      type: object
+      required: [operation_id, status, outcome]
+      properties:
+        operation_id:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, EXECUTING, SUCCEEDED, FAILED, OUTCOME_UNKNOWN]
+        outcome:
+          type: string
+          enum: [NOT_EXECUTED, EXECUTED, UNKNOWN]
+        business_id:
+          type: string
+          nullable: true
+        response_snapshot:
+          type: object
+          additionalProperties: true
+          nullable: true
+    Slot:
+      type: object
+      required: [id, clinic_id, doctor_id, service_item_id, start_at, end_at, status, version]
+      properties:
+        id: {type: string}
+        clinic_id: {type: string}
+        doctor_id: {type: string}
+        service_item_id: {type: string}
+        start_at: {type: string, format: date-time}
+        end_at: {type: string, format: date-time}
+        status:
+          type: string
+          enum: [AVAILABLE, BOOKED, UNAVAILABLE]
+        version: {type: integer, minimum: 1}
+    Appointment:
+      type: object
+      required: [id, patient_id, clinic_id, service_item_id, doctor_id, slot_id, status, version]
+      properties:
+        id: {type: string}
+        patient_id: {type: string}
+        clinic_id: {type: string}
+        service_item_id: {type: string}
+        doctor_id: {type: string}
+        slot_id: {type: string}
+        status:
+          type: string
+          enum: [CONFIRMED, CANCELLED]
+        version: {type: integer, minimum: 1}
+        start_at: {type: string, format: date-time}
+        end_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        clinic_name: {type: string, nullable: true}
+        service_item_name: {type: string, nullable: true}
+        doctor_name: {type: string, nullable: true}
+
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthenticated:
+      description: Actor authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: State, version, or idempotency conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

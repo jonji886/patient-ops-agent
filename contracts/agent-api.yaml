@@ -1,0 +1,914 @@
+openapi: 3.0.3
+info:
+  title: Patient Ops Agent API
+  version: 0.1.0
+  description: Patient, Operator, and Administrator access to the stateful Agent Runtime.
+servers:
+  - url: http://localhost:8000
+tags:
+  - name: auth
+  - name: patient
+  - name: operator
+  - name: admin
+  - name: runtime
+paths:
+  /api/v1/auth/demo-accounts:
+    get:
+      tags: [auth]
+      summary: List non-sensitive fixture demo identities
+      description: >-
+        Returns only the username, display name and server-issued role for local synthetic demos.
+        Password hashes, tokens and patient identifiers are never returned.
+      responses:
+        '200':
+          description: Fixture-only demo account directory
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DemoAccountView'
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Sign in to the fixture-only Channel Simulator
+      description: >-
+        Authenticates a synthetic demo account and returns a short-lived signed actor token.
+        It is not a real patient identity system.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Demo account authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: './common.yaml#/components/responses/Unauthenticated'
+
+  /api/v1/conversations:
+    post:
+      tags: [patient]
+      summary: Create a conversation
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+      responses:
+        '201':
+          description: Conversation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationView'
+        '401':
+          $ref: './common.yaml#/components/responses/Unauthenticated'
+
+  /api/v1/conversations/{conversation_id}/messages:
+    post:
+      tags: [patient]
+      summary: Submit a patient message to the current Conversation
+      description: >-
+        When the Run is owned by AGENT, the message may advance the deterministic workflow. When
+        execution_owner is OPERATOR, the message is persisted in the same task-scoped conversation and
+        returned without Agent understanding, workflow progression, candidate generation, or business writes;
+        the assigned Operator can read it through the Manual Task context.
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/TraceId'
+        - name: conversation_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageRequest'
+      responses:
+        '202':
+          description: Message accepted; the Run may be waiting for patient input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageAccepted'
+        '400':
+          $ref: './common.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: './common.yaml#/components/responses/Unauthenticated'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+
+  /api/v1/runs/{run_id}/slot-selection:
+    post:
+      tags: [patient]
+      summary: Select one slot from the server-provided candidates
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/StateVersion'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SlotSelectionRequest'
+      responses:
+        '200':
+          description: Selection accepted; the Agent returns a Confirmation Card.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/runs/{run_id}/service-selection:
+    post:
+      tags: [patient]
+      summary: Select a server-projected service item for the current appointment run
+      description: Selecting a service item only updates the Agent Run's collected appointment conditions; it does not create an appointment.
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/StateVersion'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceSelectionRequest'
+      responses:
+        '200':
+          description: Latest Run View with date or slot candidates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/runs/{run_id}/date-selection:
+    post:
+      tags: [patient]
+      summary: Select a server-projected available date for the current appointment run
+      description: Selecting a date only filters to concrete Slot candidates; it does not create an appointment.
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/StateVersion'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DateSelectionRequest'
+      responses:
+        '200':
+          description: Latest Run View with concrete slot candidates
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/runs/{run_id}/appointment-selection:
+    post:
+      tags: [patient]
+      summary: Select one server-provided appointment before cancellation confirmation
+      description: >-
+        Selecting an appointment does not cancel it. The server validates that the appointment
+        belongs to the active candidate list and that its version matches, then returns a
+        server-generated cancellation Confirmation Card.
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/StateVersion'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppointmentSelectionRequest'
+      responses:
+        '200':
+          description: Appointment selected; the Agent returns a cancellation Confirmation Card.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/runs/{run_id}/confirmations:
+    post:
+      tags: [patient]
+      summary: Confirm a server-generated business summary
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/StateVersion'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmationRequest'
+      responses:
+        '202':
+          description: Confirmation accepted; execution may be asynchronous.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/runs/{run_id}/cancel:
+    post:
+      tags: [patient]
+      summary: Cancel the current unfinished Agent Run
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/StateVersion'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Run cancelled; an already confirmed Appointment is not changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+        '409':
+          $ref: './common.yaml#/components/responses/Conflict'
+
+  /api/v1/runs/{run_id}/handoff:
+    post:
+      tags: [patient]
+      summary: Request Human Handoff
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandoffRequest'
+      responses:
+        '202':
+          description: Manual Task created or reused; execution owner becomes OPERATOR.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+
+  /api/v1/runs/{run_id}:
+    get:
+      tags: [runtime]
+      summary: Get the current Run projection
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Current Run view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+
+  /api/v1/runs/{run_id}/trace:
+    get:
+      tags: [runtime]
+      summary: Get a redacted Run trace
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Ordered trace events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TraceEvent'
+
+  /api/v1/manual-tasks:
+    get:
+      tags: [operator]
+      summary: List Manual Tasks
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [OPEN, ASSIGNED, RESOLVED, RETURNED_TO_AGENT, CANCELLED]
+      responses:
+        '200':
+          description: Manual Tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManualTaskView'
+
+  /api/v1/manual-tasks/{task_id}/context:
+    get:
+      tags: [operator]
+      summary: Read the authorized task context
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Manual Task, authorized task-scoped conversation, masked Run context, and sanitized trace events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorTaskContext'
+
+  /api/v1/manual-tasks/{task_id}/messages:
+    post:
+      tags: [operator]
+      summary: Send a human reply for an assigned Manual Task
+      description: >-
+        Records an Operator reply for the task-associated patient conversation. It does not resolve the task,
+        restore Agent execution, or substitute for Patient Confirmation. While execution_owner is OPERATOR,
+        patient messages sent through the original Conversation are recorded in the same task context and do not
+        trigger Agent understanding, workflow progression, candidate generation, or business writes.
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - $ref: './common.yaml#/components/parameters/TraceId'
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OperatorReplyRequest'
+      responses:
+        '200':
+          description: Reply recorded; the Run remains under Operator control
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+
+  /api/v1/admin/runs:
+    get:
+      tags: [admin]
+      summary: List Runs for operational observation
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Read-only run summaries with masked patient identifiers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminRunSummary'
+
+  /api/v1/admin/dashboard:
+    get:
+      tags: [admin]
+      summary: Read server-derived operational overview metrics
+      description: >-
+        Returns read-only, aggregated metrics, trends, funnel stages and deterministic action-item
+        categories from authorized, sanitized runtime data. It does not expose patient identifiers or permit writes.
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Operational overview for the current Admin scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboard'
+
+  /api/v1/admin/runs/{run_id}:
+    get:
+      tags: [admin]
+      summary: Read a Run for operational observation
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Read-only Run context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+
+  /api/v1/admin/runs/{run_id}/trace:
+    get:
+      tags: [admin]
+      summary: Read sanitized trace events for a Run
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Ordered trace events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TraceEvent'
+
+  /api/v1/admin/audit:
+    get:
+      tags: [admin]
+      summary: List sanitized runtime audit events
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Read-only audit feed derived from persisted runtime trace events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminAuditEvent'
+
+  /api/v1/manual-tasks/{task_id}/assign:
+    post:
+      tags: [operator]
+      summary: Assign a Manual Task to the current Operator
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Assigned Manual Task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualTaskView'
+
+  /api/v1/manual-tasks/{task_id}/resolve:
+    post:
+      tags: [operator]
+      summary: Resolve a Manual Task
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveTaskRequest'
+      responses:
+        '200':
+          description: Resolved Manual Task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualTaskView'
+
+  /api/v1/manual-tasks/{task_id}/return-to-agent:
+    post:
+      tags: [operator]
+      summary: Return a resolved task to the Agent
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '202':
+          description: Agent Run reloaded from server facts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunView'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: SyntheticActorToken
+  schemas:
+    DemoAccountView:
+      type: object
+      required: [username, display_name, actor_role]
+      properties:
+        username:
+          type: string
+          maxLength: 64
+        display_name:
+          type: string
+        actor_role:
+          type: string
+          enum: [PATIENT, OPERATOR, ADMIN]
+    LoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+    LoginResponse:
+      type: object
+      required: [access_token, token_type, expires_in_seconds, display_name, actor_role]
+      properties:
+        access_token:
+          type: string
+          description: Server-issued signed Synthetic Actor Token. Do not expose it in the UI.
+        token_type:
+          type: string
+          enum: [bearer]
+        expires_in_seconds:
+          type: integer
+          enum: [86400]
+        display_name:
+          type: string
+        actor_role:
+          type: string
+          enum: [PATIENT, OPERATOR, ADMIN]
+    CreateConversationRequest:
+      type: object
+      required: [channel]
+      properties:
+        channel:
+          type: string
+          enum: [web_simulator]
+    ConversationView:
+      type: object
+      required: [conversation_id, channel, created_at]
+      properties:
+        conversation_id: {type: string}
+        channel: {type: string}
+        created_at: {type: string, format: date-time}
+    MessageRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4000
+    MessageAccepted:
+      type: object
+      required: [run_id, accepted, run]
+      properties:
+        run_id: {type: string}
+        accepted: {type: boolean}
+        run:
+          $ref: '#/components/schemas/RunView'
+    SlotSelectionRequest:
+      type: object
+      required: [slot_id, slot_version]
+      properties:
+        slot_id: {type: string}
+        slot_version: {type: integer, minimum: 1}
+    ServiceSelectionRequest:
+      type: object
+      required: [service_item_id]
+      additionalProperties: false
+      properties:
+        service_item_id: {type: string}
+    DateSelectionRequest:
+      type: object
+      required: [date]
+      additionalProperties: false
+      properties:
+        date: {type: string, format: date}
+    AppointmentSelectionRequest:
+      type: object
+      required: [appointment_id, appointment_version]
+      properties:
+        appointment_id: {type: string}
+        appointment_version: {type: integer, minimum: 1}
+    ConfirmationRequest:
+      type: object
+      required: [confirmation_id]
+      properties:
+        confirmation_id: {type: string}
+    HandoffRequest:
+      type: object
+      required: [reason_code]
+      properties:
+        reason_code:
+          type: string
+          enum: [PATIENT_REQUESTED, RETRY_EXHAUSTED, IDENTITY_UNVERIFIED, STATE_CONFLICT, POLICY_REQUIRES_HUMAN, UNKNOWN]
+        note:
+          type: string
+          maxLength: 1000
+    RunView:
+      type: object
+      required: [run_id, conversation_id, run_status, workflow_step, execution_owner, state_version, current_reply_author]
+      properties:
+        run_id: {type: string}
+        conversation_id: {type: string}
+        masked_patient_id: {type: string}
+        operation_id: {type: string, nullable: true}
+        intent: {type: string, nullable: true}
+        run_status:
+          type: string
+          enum: [ACTIVE, WAITING_PATIENT, RECONCILING, WAITING_HUMAN, COMPLETED, COMPLETED_WITH_PENDING_SIDE_EFFECTS, FAILED, CANCELLED_BY_PATIENT]
+        workflow_step: {type: string}
+        execution_owner:
+          type: string
+          enum: [AGENT, OPERATOR]
+        state_version: {type: integer, minimum: 0}
+        current_reply: {type: string, nullable: true}
+        service_item_name:
+          type: string
+          nullable: true
+          description: Clinic Core display name of the service currently selected for this Run.
+        requested_date:
+          type: string
+          format: date
+          nullable: true
+          description: Patient's current requested or selected appointment date.
+        suggested_replies:
+          type: array
+          description: Server-authorized next replies. The client may only fill the composer and must not auto-submit them.
+          items: {$ref: '#/components/schemas/SuggestedReply'}
+        current_reply_author:
+          type: string
+          enum: [AGENT, OPERATOR]
+        action_required:
+          type: string
+          nullable: true
+          enum: [NONE, SERVICE_SELECTION, DATE_SELECTION, SLOT_SELECTION, APPOINTMENT_SELECTION, CONFIRMATION, HUMAN]
+        selected_slot_id: {type: string, nullable: true}
+        appointment_id: {type: string, nullable: true}
+        confirmation_id: {type: string, nullable: true}
+        core_business_status: {type: string}
+        writeback_status: {type: string}
+        notification_status: {type: string}
+        manual_task_id: {type: string, nullable: true}
+        candidate_slots:
+          type: array
+          items: {$ref: './common.yaml#/components/schemas/Slot'}
+        candidate_service_items:
+          type: array
+          description: Current Clinic Core service options, projected only when service selection is required.
+          items: {$ref: '#/components/schemas/ServiceOption'}
+        candidate_dates:
+          type: array
+          description: Available appointment dates projected from actual Clinic Core Slots.
+          items: {$ref: '#/components/schemas/AvailableDate'}
+        candidate_appointments:
+          type: array
+          items: {$ref: './common.yaml#/components/schemas/Appointment'}
+        attempt_count: {type: integer, minimum: 0}
+        last_error_code: {type: string, nullable: true}
+    SuggestedReply:
+      type: object
+      required: [id, label, message, mode]
+      properties:
+        id: {type: string}
+        label: {type: string}
+        message: {type: string}
+        mode: {type: string, enum: [FILL_COMPOSER]}
+    ServiceOption:
+      type: object
+      required: [id, name, duration_minutes]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        duration_minutes: {type: integer, minimum: 1}
+    AvailableDate:
+      type: object
+      required: [date, available_slot_count]
+      properties:
+        date: {type: string, format: date}
+        available_slot_count: {type: integer, minimum: 1}
+    TraceEvent:
+      type: object
+      required: [timestamp, event, trace_id]
+      properties:
+        timestamp: {type: string, format: date-time}
+        trace_id: {type: string}
+        event: {type: string}
+        node: {type: string, nullable: true}
+        tool_name: {type: string, nullable: true}
+        status: {type: string, nullable: true}
+        duration_ms: {type: integer, nullable: true}
+        details:
+          type: object
+          additionalProperties: true
+    ManualTaskView:
+      type: object
+      required: [task_id, run_id, reason_code, status]
+      properties:
+        task_id: {type: string}
+        run_id: {type: string}
+        reason_code: {type: string}
+        status:
+          type: string
+          enum: [OPEN, ASSIGNED, RESOLVED, RETURNED_TO_AGENT, CANCELLED]
+        assigned_operator_id: {type: string, nullable: true}
+        resolution: {type: string, nullable: true}
+    OperatorTaskContext:
+      type: object
+      required: [task, run, messages, trace]
+      properties:
+        task: {$ref: '#/components/schemas/ManualTaskView'}
+        run: {$ref: '#/components/schemas/RunView'}
+        messages:
+          type: array
+          description: Task-associated messages, available only through the authorized Operator context endpoint.
+          items: {$ref: '#/components/schemas/ConversationMessage'}
+        trace:
+          type: array
+          items: {$ref: '#/components/schemas/TraceEvent'}
+    AdminRunSummary:
+      type: object
+      required: [run_id, masked_patient_id, run_status, workflow_step, execution_owner, started_at]
+      properties:
+        run_id: {type: string}
+        masked_patient_id: {type: string}
+        intent: {type: string, nullable: true}
+        run_status: {type: string}
+        workflow_step: {type: string}
+        execution_owner: {type: string, enum: [AGENT, OPERATOR]}
+        manual_task_id: {type: string, nullable: true}
+        last_error_code: {type: string, nullable: true}
+        started_at: {type: string, format: date-time}
+    AdminAuditEvent:
+      allOf:
+        - $ref: '#/components/schemas/TraceEvent'
+        - type: object
+          required: [run_id, masked_patient_id]
+          properties:
+            run_id: {type: string}
+            masked_patient_id: {type: string}
+    AdminDashboard:
+      type: object
+      required: [generated_at, metrics, status_distribution, intent_distribution, funnel, daily_trend, error_distribution, action_items]
+      properties:
+        generated_at: {type: string, format: date-time}
+        metrics:
+          type: object
+          required: [total_runs, successful_appointments, appointment_completion_rate, waiting_patient, waiting_human, pending_side_effects, failed_runs, security_incidents]
+          properties:
+            total_runs: {type: integer, minimum: 0}
+            successful_appointments: {type: integer, minimum: 0}
+            appointment_completion_rate: {type: number, nullable: true, minimum: 0, maximum: 100}
+            waiting_patient: {type: integer, minimum: 0}
+            waiting_human: {type: integer, minimum: 0}
+            pending_side_effects: {type: integer, minimum: 0}
+            failed_runs: {type: integer, minimum: 0}
+            security_incidents: {type: integer, minimum: 0}
+        status_distribution:
+          type: array
+          items: {$ref: '#/components/schemas/AdminMetricBucket'}
+        intent_distribution:
+          type: array
+          items: {$ref: '#/components/schemas/AdminMetricBucket'}
+        funnel:
+          type: array
+          items: {$ref: '#/components/schemas/AdminMetricBucket'}
+        daily_trend:
+          type: array
+          items: {$ref: '#/components/schemas/AdminDailyTrend'}
+        error_distribution:
+          type: array
+          items: {$ref: '#/components/schemas/AdminMetricBucket'}
+        action_items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminActionItem'}
+    AdminMetricBucket:
+      type: object
+      required: [key, count]
+      properties:
+        key: {type: string}
+        count: {type: integer, minimum: 0}
+    AdminDailyTrend:
+      type: object
+      required: [date, total_runs, successful_appointments, waiting_human]
+      properties:
+        date: {type: string, format: date}
+        total_runs: {type: integer, minimum: 0}
+        successful_appointments: {type: integer, minimum: 0}
+        waiting_human: {type: integer, minimum: 0}
+    AdminActionItem:
+      type: object
+      required: [kind, severity, count, run_ids]
+      properties:
+        kind: {type: string, enum: [HUMAN_HANDOFF, FAILED_RUN, PENDING_SIDE_EFFECT, SECURITY_INCIDENT, SYSTEM_HEALTHY]}
+        severity: {type: string, enum: [success, warning, danger]}
+        count: {type: integer, minimum: 0}
+        run_ids:
+          type: array
+          items: {type: string}
+    ConversationMessage:
+      type: object
+      required: [author, text, created_at]
+      properties:
+        author:
+          type: string
+          enum: [PATIENT, OPERATOR]
+        text:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    OperatorReplyRequest:
+      type: object
+      required: [message]
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4000
+    ResolveTaskRequest:
+      type: object
+      required: [resolution]
+      properties:
+        resolution:
+          type: string
+          minLength: 1
+          maxLength: 4000

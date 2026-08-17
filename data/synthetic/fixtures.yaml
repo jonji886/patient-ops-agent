@@ -1,0 +1,163 @@
+# Synthetic fixtures only. No real patient or clinic data.
+business_clock: 2026-08-14T09:00:00+08:00
+
+# Fixture-only credentials for the local Channel Simulator. This is not a real
+# authentication system and must never be connected to production patient data.
+demo_accounts:
+  - username: patient
+    password_sha256: 8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92
+    actor_id: ACTOR-P1001
+    patient_id: P1001
+    role: PATIENT
+    display_name: 演示患者
+  - username: operator
+    password_sha256: 8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92
+    actor_id: OP-1
+    role: OPERATOR
+    display_name: 演示客服
+  - username: admin
+    password_sha256: 8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92
+    actor_id: ADM-1
+    role: ADMIN
+    display_name: 演示管理员
+
+patients:
+  - id: P1001
+    display_name: 患者甲
+    preferred_channel: web_simulator
+    status: ACTIVE
+    facts:
+      - id: F1001
+        fact_type: last_cleaning_date
+        value: 2026-02-10
+        source: synthetic_patient_ops
+        observed_at: 2026-08-14T08:00:00+08:00
+    contact_consents:
+      - channel: web_simulator
+        allowed: true
+        effective_at: 2026-01-01T00:00:00+08:00
+        expires_at: null
+    next_best_actions:
+      - id: NBA1001
+        action_type: APPOINTMENT_SUPPORT
+        reason_code: PATIENT_REQUESTED
+        status: PROPOSED
+        created_at: 2026-08-14T08:00:00+08:00
+  - id: P1002
+    display_name: 患者乙
+    preferred_channel: web_simulator
+    status: ACTIVE
+    facts: []
+    contact_consents:
+      - channel: web_simulator
+        allowed: false
+        effective_at: 2026-01-01T00:00:00+08:00
+        expires_at: null
+    next_best_actions: []
+
+clinics:
+  - id: C001
+    name: 合成徐汇门诊
+    timezone: Asia/Shanghai
+    status: ACTIVE
+
+service_items:
+  - id: SV-CLEANING
+    name: 洗牙
+    department_id: DEP-PREVENTIVE
+    duration_minutes: 60
+    status: ACTIVE
+  - id: SV-CHECKUP
+    name: 口腔检查
+    department_id: DEP-GENERAL
+    duration_minutes: 30
+    status: ACTIVE
+  - id: SV-FILLING
+    name: 补牙
+    department_id: DEP-GENERAL
+    duration_minutes: 45
+    status: ACTIVE
+  - id: SV-EXTRACTION
+    name: 拔牙
+    department_id: DEP-GENERAL
+    duration_minutes: 45
+    status: ACTIVE
+
+doctors:
+  - id: D001
+    name: 张医生
+    clinic_id: C001
+    status: ACTIVE
+    service_item_ids: [SV-CLEANING, SV-CHECKUP, SV-FILLING]
+  - id: D002
+    name: 李医生
+    clinic_id: C001
+    status: ACTIVE
+    service_item_ids: [SV-CLEANING]
+  - id: D003
+    name: 王医生
+    clinic_id: C001
+    status: ACTIVE
+    service_item_ids: [SV-EXTRACTION]
+
+slots:
+  - id: S1001
+    clinic_id: C001
+    doctor_id: D001
+    service_item_id: SV-CLEANING
+    start_at: 2026-08-15T14:00:00+08:00
+    end_at: 2026-08-15T15:00:00+08:00
+    status: AVAILABLE
+    version: 1
+  - id: S1002
+    clinic_id: C001
+    doctor_id: D001
+    service_item_id: SV-CLEANING
+    start_at: 2026-08-15T15:00:00+08:00
+    end_at: 2026-08-15T16:00:00+08:00
+    status: AVAILABLE
+    version: 1
+  - id: S1003
+    clinic_id: C001
+    doctor_id: D002
+    service_item_id: SV-CLEANING
+    start_at: 2026-08-16T10:00:00+08:00
+    end_at: 2026-08-16T11:00:00+08:00
+    status: AVAILABLE
+    version: 3
+  - id: S1004
+    clinic_id: C001
+    doctor_id: D001
+    service_item_id: SV-CHECKUP
+    start_at: 2026-08-15T10:00:00+08:00
+    end_at: 2026-08-15T10:30:00+08:00
+    status: BOOKED
+    version: 2
+  - id: S1005
+    clinic_id: C001
+    doctor_id: D001
+    service_item_id: SV-FILLING
+    start_at: 2026-08-16T14:00:00+08:00
+    end_at: 2026-08-16T14:45:00+08:00
+    status: AVAILABLE
+    version: 1
+  - id: S1006
+    clinic_id: C001
+    doctor_id: D003
+    service_item_id: SV-EXTRACTION
+    start_at: 2026-08-17T10:00:00+08:00
+    end_at: 2026-08-17T10:45:00+08:00
+    status: AVAILABLE
+    version: 1
+
+appointments:
+  - id: A1001
+    patient_id: P1002
+    clinic_id: C001
+    service_item_id: SV-CHECKUP
+    doctor_id: D001
+    slot_id: S1004
+    status: CONFIRMED
+    version: 1
+    created_at: 2026-08-13T15:00:00+08:00
+    updated_at: 2026-08-13T15:00:00+08:00

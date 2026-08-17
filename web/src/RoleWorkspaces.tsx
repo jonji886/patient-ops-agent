@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ApiError,
   assignManualTask,
@@ -69,46 +69,141 @@ function ErrorNotice({ message }: { message: string | null }) {
   return message ? <div className="notice notice--error" role="alert">{message}</div> : null;
 }
 
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(new Date(value));
+function parseDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  const date = parseDate(value);
+  return date ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(date) : "时间未知";
+}
+
+function formatTimeOfDay(value: string | null | undefined): string | null {
+  const date = parseDate(value);
+  return date ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }).format(date) : null;
+}
+
+function waitingText(since: string | null | undefined): string | null {
+  const date = parseDate(since);
+  if (!date) return null;
+  const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+  if (minutes < 1) return "不足 1 分钟";
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+}
+
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return <button type="button" className="copy-button" onClick={() => {
+    void navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    }).catch(() => setCopied(false));
+  }}>{copied ? "已复制" : "复制"}</button>;
+}
+
+type TraceCategory = "WORKFLOW" | "POLICY" | "TOOL" | "RECOVERY" | "SIDE_EFFECT";
+
+const traceCategoryLabels: Record<TraceCategory | "ALL", string> = {
+  ALL: "全部", WORKFLOW: "流程", POLICY: "策略", TOOL: "业务调用", RECOVERY: "恢复与接管", SIDE_EFFECT: "后续服务",
+};
+
+const traceCategoryMap: Record<string, TraceCategory> = {
+  policy_denied: "POLICY", duplicate_request_suppressed: "POLICY",
+  human_handoff: "RECOVERY", run_returned_to_agent: "RECOVERY", tool_outcome_unknown: "RECOVERY",
+  outbox_persisted: "SIDE_EFFECT", notification_suppressed_by_consent: "SIDE_EFFECT",
+};
+
+function traceCategory(event: TraceEvent): TraceCategory {
+  return traceCategoryMap[event.event] ?? (event.tool_name ? "TOOL" : "WORKFLOW");
+}
+
+const defaultExpandedEvents = new Set(["human_handoff", "policy_denied", "tool_outcome_unknown"]);
+
 function TraceList({ events }: { events: TraceEvent[] }) {
+  const [filter, setFilter] = useState<TraceCategory | "ALL">("ALL");
   if (!events.length) return <p className="panel-copy">暂无可展示的执行记录。</p>;
-  return <ol className="role-trace-list">
-    {events.map((event, index) => <li key={`${event.trace_id}-${index}`}>
-      <span className={`role-trace-dot role-trace-dot--${tone(event.status ?? "NEUTRAL")}`} aria-hidden="true" />
-      <div><strong>{traceLabel(event.event)}</strong><p>{workflowLabel(event.node)}{event.tool_name ? ` · ${toolLabel(event.tool_name)}` : ""}</p><time>{formatDateTime(event.timestamp)}</time></div>
+  const visible = filter === "ALL" ? events : events.filter((event) => traceCategory(event) === filter);
+  return <>
+    <div className="trace-filters" role="group" aria-label="执行记录筛选">
+      {(Object.keys(traceCategoryLabels) as Array<TraceCategory | "ALL">).map((key) => <button key={key} type="button" className={`trace-filter${filter === key ? " trace-filter--active" : ""}`} onClick={() => setFilter(key)}>{traceCategoryLabels[key]}</button>)}
+    </div>
+    {visible.length === 0 ? <p className="panel-copy">该分类下暂无执行记录。</p> : <ol className="role-trace-list">
+      {visible.map((event, index) => <li key={`${event.trace_id}-${index}`}>
+        <span className={`role-trace-dot role-trace-dot--${tone(event.status ?? "NEUTRAL")}`} aria-hidden="true" />
+        <div>
+          <strong>{traceLabel(event.event)}</strong>
+          <p>{workflowLabel(event.node)}{event.tool_name ? ` · ${toolLabel(event.tool_name)}` : ""}{event.duration_ms != null ? ` · ${event.duration_ms}ms` : ""}</p>
+          <time>{formatDateTime(event.timestamp)}</time>
+          <details className="role-trace-details" open={defaultExpandedEvents.has(event.event) || undefined}>
+            <summary>技术详情</summary>
+            <dl className="trace-details">
+              {event.node ? <div><dt>工作流节点</dt><dd>{event.node}</dd></div> : null}
+              {event.tool_name ? <div><dt>Tool</dt><dd>{event.tool_name}</dd></div> : null}
+              {event.status ? <div><dt>结果</dt><dd>{event.status}</dd></div> : null}
+              <div><dt>Trace ID</dt><dd>{event.trace_id} <CopyButton value={event.trace_id} /></dd></div>
+              {Object.entries(event.details ?? {}).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}
+            </dl>
+          </details>
+        </div>
+      </li>)}
+    </ol>}
+  </>;
+}
+
+const caseSteps = ["领取任务", "回复与处理", "记录处理完成", "交还 Agent"];
+
+function caseStepIndex(status: ManualTask["status"]): number {
+  if (status === "OPEN") return 0;
+  if (status === "ASSIGNED") return 1;
+  if (status === "RESOLVED") return 2;
+  if (status === "RETURNED_TO_AGENT") return 3;
+  return -1;
+}
+
+function CaseProgress({ status }: { status: ManualTask["status"] }) {
+  if (status === "CANCELLED") return <p className="panel-copy">任务已取消，无需继续处理。</p>;
+  const current = caseStepIndex(status);
+  return <nav className="case-steps" aria-label="处理进度"><ol>
+    {caseSteps.map((step, index) => <li key={step} className={`case-steps__step${index < current ? " case-steps__step--done" : index === current ? " case-steps__step--active" : ""}`} aria-current={index === current ? "step" : undefined}>
+      <span aria-hidden="true">{index < current ? "✓" : index + 1}</span><strong>{step}</strong>
     </li>)}
-  </ol>;
+  </ol></nav>;
 }
 
 function TaskQueue({ tasks, selectedTaskId, onSelect }: { tasks: ManualTask[]; selectedTaskId: string | null; onSelect: (taskId: string) => void }) {
   return <aside className="task-queue" aria-label="人工任务队列">
     <div className="workspace-panel-heading"><div><p className="eyebrow">MANUAL TASKS</p><h2>待处理任务</h2></div><span className="queue-count">{tasks.length}</span></div>
-    {tasks.length === 0 ? <p className="panel-copy">当前没有需要人工处理的任务。</p> : <div className="task-list" role="list">
+    {tasks.length === 0 ? <p className="panel-copy">当前没有等待人工的请求。出现新的人工任务时，会自动显示在这里。</p> : <div className="task-list" role="list">
       {tasks.map((task) => <button key={task.task_id} type="button" role="listitem" className={`task-list__item${task.task_id === selectedTaskId ? " task-list__item--selected" : ""}`} onClick={() => onSelect(task.task_id)}>
         <span className="task-list__top"><strong>{label(task.reason_code)}</strong><StatusBadge value={task.status} /></span>
-        <span className="task-list__meta">{task.assigned_operator_id ? `已分配给 ${task.assigned_operator_id}` : "尚未分配"}</span>
+        <span className="task-list__meta">患者 {task.masked_patient_id ?? "已脱敏"} · {task.intent ? label(task.intent) : "意图尚未解析"}</span>
+        <span className="task-list__meta">{task.assigned_operator_id ? `已分配给 ${task.assigned_operator_id}` : "尚未分配"}{formatTimeOfDay(task.created_at) ? ` · ${formatTimeOfDay(task.created_at)} 创建` : ""}{waitingText(task.created_at) && (task.status === "OPEN" || task.status === "ASSIGNED") ? ` · 已等待 ${waitingText(task.created_at)}` : ""}</span>
       </button>)}
     </div>}
   </aside>;
 }
 
-function OperatorCase({ context, busy, onAssign, onReply, onResolve, onReturn }: { context: OperatorTaskContext | null; busy: boolean; onAssign: () => void; onReply: (message: string) => void; onResolve: (resolution: string) => void; onReturn: () => void }) {
+function OperatorCase({ context, hasTasks, busy, onAssign, onReply, onResolve, onReturn }: { context: OperatorTaskContext | null; hasTasks: boolean; busy: boolean; onAssign: () => void; onReply: (message: string) => void; onResolve: (resolution: string) => void; onReturn: () => void }) {
   const [resolution, setResolution] = useState("");
   const [reply, setReply] = useState("");
   const [returnConfirmation, setReturnConfirmation] = useState(false);
   useEffect(() => { setResolution(context?.task.resolution ?? ""); setReply(""); setReturnConfirmation(false); }, [context?.task.task_id, context?.task.status, context?.task.resolution]);
-  if (!context) return <main className="operator-case operator-case--empty"><p className="eyebrow">CASE WORKSPACE</p><h1>选择一个人工任务</h1><p>在任务队列中选择任务后，可查看经过授权的脱敏上下文和执行记录。</p></main>;
+  if (!context) return <main className="operator-case operator-case--empty"><p className="eyebrow">CASE WORKSPACE</p><h1>{hasTasks ? "选择一个人工任务" : "暂无待处理任务"}</h1><p>{hasTasks ? "在任务队列中选择任务后，可查看经过授权的脱敏上下文和执行记录。" : "当前没有需要人工处理的请求。出现新任务时，左侧队列会自动更新。"}</p></main>;
   const { task, run, trace } = context;
+  const isPending = task.status === "OPEN" || task.status === "ASSIGNED";
   return <main className="operator-case" aria-label="人工任务处理工作区">
-    <header className="case-header"><div><p className="eyebrow">CASE WORKSPACE</p><h1>{label(task.reason_code)}</h1><p>患者 {run.masked_patient_id ?? "已脱敏"} · {label(run.intent)}</p></div><StatusBadge value={task.status} /></header>
+    <header className="case-header"><div><p className="eyebrow">CASE WORKSPACE</p><h1>{label(task.reason_code)}</h1><p>患者 {run.masked_patient_id ?? "已脱敏"} · {run.intent ? label(run.intent) : "意图尚未解析"}</p></div><StatusBadge value={task.status} /></header>
+    <CaseProgress status={task.status} />
     <section className="case-conversation" aria-labelledby="case-conversation-title"><div><p className="eyebrow">CONVERSATION</p><h2 id="case-conversation-title">患者说了什么</h2><p>仅显示此人工任务关联的会话内容。</p></div><div className="case-conversation__messages">{context.messages.length === 0 ? <p className="panel-copy">尚无可展示的患者消息。</p> : context.messages.map((message, index) => <article className={`case-message case-message--${message.author.toLowerCase()}`} key={`${message.created_at}-${index}`}><span>{message.author === "PATIENT" ? "患者" : "人工客服"}</span><p>{message.text}</p><time>{formatDateTime(message.created_at)}</time></article>)}{run.current_reply && (run.current_reply_author === "AGENT" || context.messages.at(-1)?.text !== run.current_reply) && <article className={`case-message case-message--${run.current_reply_author.toLowerCase()}`}><span>{run.current_reply_author === "OPERATOR" ? "人工客服" : "Agent"}</span><p>{run.current_reply}</p><time>当前回复</time></article>}</div></section>
-    <section className="case-summary" aria-label="当前任务摘要"><div><span>当前业务状态</span><StatusBadge value={run.run_status} /></div><div><span>执行归属</span><StatusBadge value={run.execution_owner} /></div><div><span>最近系统回复</span><strong>{run.current_reply ?? "暂无可展示的回复"}</strong></div></section>
+    <section className="case-summary" aria-label="当前任务摘要"><div><span>当前业务状态</span><StatusBadge value={run.run_status} /></div><div><span>执行归属</span><StatusBadge value={run.execution_owner} /></div><div><span>任务创建</span><strong>{formatDateTime(task.created_at)}</strong>{isPending && waitingText(task.created_at) ? <small>已等待 {waitingText(task.created_at)}</small> : null}</div></section>
     <section className="case-actions" aria-labelledby="case-actions-title"><div><p className="eyebrow">处理操作</p><h2 id="case-actions-title">记录并完成任务</h2></div>
-      {task.status === "OPEN" && <><p className="panel-copy">请先领取任务，再查看上下文、回复患者或完成处理。</p><button type="button" className="button button--primary" onClick={onAssign} disabled={busy}>领取任务</button></>}
-      {task.status === "ASSIGNED" && <><label className="resolution-field">向患者回复<textarea aria-label="向患者回复" value={reply} onChange={(event) => setReply(event.target.value)} placeholder="输入将发送给患者的人工回复" rows={3} disabled={busy} /></label><button type="button" className="button button--secondary" onClick={() => onReply(reply.trim())} disabled={busy || !reply.trim()}>发送给患者</button><label className="resolution-field">处理说明<textarea value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="记录已核实的事实和处理结果" rows={3} disabled={busy} /></label><button type="button" className="button button--primary" onClick={() => onResolve(resolution.trim())} disabled={busy || !resolution.trim()}>记录处理完成</button></>}
+      {task.status === "OPEN" && <><p className="panel-copy">可先查看上方的患者上下文与执行记录；领取任务后才能回复患者或完成处理。</p><button type="button" className="button button--primary" onClick={onAssign} disabled={busy}>领取任务</button></>}
+      {task.status === "ASSIGNED" && <><p className="panel-copy">任务当前由 {task.assigned_operator_id ?? "你"} 负责；只有领取人可以回复患者或记录处理。</p><label className="resolution-field">向患者回复<textarea aria-label="向患者回复" value={reply} onChange={(event) => setReply(event.target.value)} placeholder="输入将发送给患者的人工回复" rows={3} disabled={busy} /></label><button type="button" className="button button--secondary" onClick={() => onReply(reply.trim())} disabled={busy || !reply.trim()}>发送给患者</button><label className="resolution-field">处理说明<textarea value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="记录已核实的事实和处理结果" rows={3} disabled={busy} /></label><p className="case-actions__hint">“发送给患者”只把回复写入患者会话；“记录处理完成”仅登记处理结论，不会通知患者，也不会自动交还 Agent。</p><button type="button" className="button button--primary" onClick={() => onResolve(resolution.trim())} disabled={busy || !resolution.trim()}>记录处理完成</button></>}
       {task.status === "RESOLVED" && !returnConfirmation && <button type="button" className="button button--secondary" onClick={() => setReturnConfirmation(true)} disabled={busy}>交还 Agent</button>}
       {task.status === "RESOLVED" && returnConfirmation && <div className="return-confirmation" role="status"><p>交还后，旧患者确认会失效；Agent 将从服务端事实重新开始判断，后续高风险操作仍需患者重新确认。</p><div><button type="button" className="button button--secondary" onClick={() => setReturnConfirmation(false)} disabled={busy}>暂不交还</button><button type="button" className="button button--primary" onClick={onReturn} disabled={busy}>确认交还 Agent</button></div></div>}
       {task.status === "RETURNED_TO_AGENT" && <p className="panel-copy">任务已交还 Agent，当前页面不会乐观推断后续业务结果。</p>}
@@ -123,9 +218,16 @@ export function OperatorWorkspace({ token, headerActions }: { token: string; hea
   const [context, setContext] = useState<OperatorTaskContext | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newTaskCount, setNewTaskCount] = useState(0);
+  const seenTaskIds = useRef<Set<string>>(new Set());
+
+  function rememberTasks(list: ManualTask[]) {
+    list.forEach((item) => seenTaskIds.current.add(item.task_id));
+  }
 
   async function refresh(selectTaskId = selectedTaskId) {
     const next = await listManualTasks(token);
+    rememberTasks(next);
     setTasks(next);
     const availableId = selectTaskId && next.some((item) => item.task_id === selectTaskId) ? selectTaskId : next[0]?.task_id ?? null;
     setSelectedTaskId(availableId);
@@ -141,9 +243,21 @@ export function OperatorWorkspace({ token, headerActions }: { token: string; hea
     }, 1500);
     return () => window.clearInterval(id);
   }, [busy, selectedTaskId, token]);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (busy) return;
+      void listManualTasks(token).then((next) => {
+        const fresh = next.filter((item) => !seenTaskIds.current.has(item.task_id));
+        rememberTasks(next);
+        if (fresh.length) setNewTaskCount((count) => count + fresh.length);
+        setTasks(next);
+      }).catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [busy, token]);
   async function execute(action: () => Promise<unknown>) { setBusy(true); setError(null); try { await action(); await refresh(); } catch (reason) { setError(reason instanceof ApiError ? reason.message : "操作未能完成，请重试。"); } finally { setBusy(false); } }
 
-  return <div className="role-shell role-shell--operator"><header className="role-header"><div><p className="eyebrow">PATIENT OPS AGENT · OPERATOR</p><h1>人工客服工作台</h1></div><div>{headerActions}<span className="connection"><i aria-hidden="true" />任务服务已连接</span></div></header><ErrorNotice message={error} /><div className="operator-workspace"><TaskQueue tasks={tasks} selectedTaskId={selectedTaskId} onSelect={setSelectedTaskId} /><OperatorCase context={context} busy={busy} onAssign={() => context && execute(() => assignManualTask(token, context.task.task_id))} onReply={(message) => context && execute(() => sendOperatorReply(token, context.task.task_id, message))} onResolve={(resolution) => context && execute(() => resolveManualTask(token, context.task.task_id, resolution))} onReturn={() => context && execute(() => returnManualTaskToAgent(token, context.task.task_id))} /><aside className="operator-context" aria-label="任务上下文"><p className="eyebrow">TASK CONTEXT</p>{context ? <dl className="runtime-list"><div><dt>任务状态</dt><dd><StatusBadge value={context.task.status} /></dd></div><div><dt>处理责任</dt><dd>{context.task.assigned_operator_id ?? "待领取"}</dd></div><div><dt>Run 状态</dt><dd><StatusBadge value={context.run.run_status} /></dd></div><div><dt>任务 ID</dt><dd>{context.task.task_id}</dd></div></dl> : <p className="panel-copy">选择任务后显示经授权的上下文。</p>}</aside></div></div>;
+  return <div className="role-shell role-shell--operator"><header className="role-header"><div><p className="eyebrow">PATIENT OPS AGENT · OPERATOR</p><h1>人工客服工作台</h1></div><div>{headerActions}<span className="connection"><i aria-hidden="true" />任务服务已连接</span></div></header><ErrorNotice message={error} />{newTaskCount > 0 ? <div className="notice" role="status"><span>队列新增 {newTaskCount} 个人工任务。</span><button type="button" className="text-button" onClick={() => setNewTaskCount(0)}>知道了</button></div> : null}<div className="operator-workspace"><TaskQueue tasks={tasks} selectedTaskId={selectedTaskId} onSelect={setSelectedTaskId} /><OperatorCase context={context} hasTasks={tasks.length > 0} busy={busy} onAssign={() => context && execute(() => assignManualTask(token, context.task.task_id))} onReply={(message) => context && execute(() => sendOperatorReply(token, context.task.task_id, message))} onResolve={(resolution) => context && execute(() => resolveManualTask(token, context.task.task_id, resolution))} onReturn={() => context && execute(() => returnManualTaskToAgent(token, context.task.task_id))} /><aside className="operator-context" aria-label="任务上下文"><p className="eyebrow">TASK CONTEXT</p>{context ? <><dl className="runtime-list"><div><dt>处理责任</dt><dd>{context.task.assigned_operator_id ?? "待领取"}</dd></div><div><dt>任务创建</dt><dd>{formatDateTime(context.task.created_at)}</dd></div></dl><details className="technical-details"><summary>技术详情</summary><dl className="runtime-list runtime-list--technical"><div><dt>任务 ID</dt><dd>{context.task.task_id} <CopyButton value={context.task.task_id} /></dd></div><div><dt>Run ID</dt><dd>{context.task.run_id} <CopyButton value={context.task.run_id} /></dd></div></dl></details></> : <p className="panel-copy">选择任务后显示经授权的上下文。</p>}</aside></div></div>;
 }
 
 function AdminRunList({ runs, selectedRunId, onSelect }: { runs: AdminRunSummary[]; selectedRunId: string | null; onSelect: (runId: string) => void }) {

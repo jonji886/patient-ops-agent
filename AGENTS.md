@@ -2,25 +2,26 @@
 
 > 通用 AI Coding 协作规范  
 > 目标：让 AI 在明确需求和稳定边界内高效开发，确保变更可控、可验证、可维护。  
-> 原则：**产品优先 · 规格驱动 · 小步修改 · 风险优先 · 验证后完成**
+> 原则：**产品优先 · 第一性原理 · 规格驱动 · 小步交付 · 风险优先 · 验证后完成**
 
 ---
 
-## 1. 核心原则
+## 1. Core Principles
 
 - 所有文档输出中文优先。
-- **产品优先**：先理解问题、用户和业务价值，再写代码。
-- **规格文档驱动**：以明确需求、`SPEC.md` 和稳定契约为准。
-- **先设计后编码**：复杂或高风险功能先设计落地必要的相关文档，再实现。
-- **风险驱动测试**：核心、高风险、易回归逻辑优先测试驱动。
-- **小步修改**：只做完成当前任务所需的最小变更。
+- **产品优先**：先理解用户、问题和业务价值，再写代码。
+- **第一性原理**：复杂问题先回到目标、事实和不可变约束，再推导最简单可行方案，不被现有实现或惯例绑架。
+- **规格驱动**：以用户当前明确指令、`SPEC.md` 和稳定契约为事实依据。
+- **先设计后编码**：复杂、高风险或跨模块功能先完成最小必要设计，再实现。
+- **小步交付**：优先可运行、可验证的 Vertical Slice，避免一次性大范围实现。
+- **风险驱动测试**：核心、高风险、易回归逻辑优先测试；高风险边界主动进行对抗性测试。
 - **不猜测**：不擅自补充业务规则；重要不确定性必须明确。
-- **简单优先**：优先简单、清晰、可维护的方案，避免过度工程化。
+- **简单优先**：避免过早抽象、无关重构和过度工程化。
 - **验证后完成**：未经实际验证，不得声称任务完成。
 
 ---
 
-## 2. 信息优先级
+## 2. Source of Truth
 
 发生冲突时：
 
@@ -29,7 +30,7 @@
 >
 SPEC / 稳定契约
 >
-Architecture / ADR
+Architecture / UI Spec / ADR
 >
 Plan
 >
@@ -42,56 +43,54 @@ AGENTS.md
 
 文档职责：
 
-- `SPEC.md`：需求、范围、边界、验收标准
-- `docs/architecture.md`：整体技术设计,基于`SPEC.md`作为输入事实
-- `docs/ui-spec.md`:整体UI设计,基于`SPEC.md`作为输入事实
-- `docs/adr/`：重要长期技术决策
-- `plans/`：复杂任务实施计划
-- `README.md`：项目价值、使用方式、核心能力
+- `SPEC.md`：需求、范围、边界、Acceptance Criteria
+- `docs/architecture.md`：整体技术设计
+- `docs/ui-spec.md`：整体 UI / UX 设计
+- `docs/adr/`：重大长期技术决策
+- `plans/`：复杂任务的临时实施计划
+- `README.md`：项目价值、核心能力、Demo、使用方式
 
-不要为了适配现有实现而反向修改需求。
+不得为了适配现有实现而反向修改需求。
 
 ---
 
-## 3. 默认工作流
+## 3. Default Workflow
 
 ```text
 理解 → 设计 → 计划 → 实现 → 测试 → 验证 → 文档同步
 ```
 
-开始任务前优先阅读：
+开始任务前按需阅读：
 
 1. `SPEC.md`
 2. `README.md`
-3. 相关 Architecture / ADR
+3. 相关 Architecture / UI Spec / ADR
 4. 相关代码与测试
 
-先明确：
+实现前至少明确：
 
-- 问题与目标
+- 用户与目标
 - 当前行为与预期行为
-- 修改范围
+- 输入与输出
+- Scope / Out of Scope
 - 风险与边界
-- 验收条件
+- Acceptance Criteria
 
-简单、低风险修改可直接执行。  
-复杂或高风险任务应先给出最小必要设计和实施计划，并拆成可独立验证的小步骤。
+简单、低风险修改可直接执行。
+
+复杂、高风险或跨模块任务应：
+
+1. 回到目标、事实和约束判断真正问题
+2. 形成最小必要设计
+3. 必要时创建 Plan
+4. 拆成可独立验证的小步骤
+5. 优先交付可运行的 Vertical Slice
 
 ---
 
-## 4. 需求与范围
+## 4. Requirements & Scope
 
-实现前确认：
-
-- 用户与目标
-- 核心场景
-- 输入与输出
-- 功能范围
-- 异常与边界
-- Out of Scope
-- Acceptance Criteria
-
-重要需求尽量使用可验证形式：
+重要需求优先使用：
 
 ```text
 Given 前置条件
@@ -103,16 +102,22 @@ Then  预期结果
 
 - 擅自扩大 Scope
 - 删除已有业务规则
-- 为“代码更优雅”改变业务行为
+- 为代码“更优雅”改变业务行为
 - 因实现限制反向修改需求
+- 未经确认引入新的产品行为
 
-仅当任务本身包含需求变化时更新 `SPEC.md`。
+仅当任务包含需求变化时更新 `SPEC.md`。
+
+若缺少 `SPEC.md`：
+
+- 明确、低风险的小任务可依据用户当前指令执行
+- 涉及核心业务规则、产品行为或范围不明确时，不擅自猜测，应先明确需求或补充 SPEC
 
 ---
 
-## 5. 设计与架构
+## 5. Design & Architecture
 
-遵守现有架构和模块边界：
+设计优先级：
 
 ```text
 简单 > 清晰 > 可维护 > 炫技
@@ -126,35 +131,73 @@ Then  预期结果
 - 优先复用，避免复制
 - 避免过早抽象
 - 避免隐藏副作用
-- 不为单个需求大范围重构
+- 不为单个需求做大范围无关重构
 
-重大、长期技术决策使用 ADR 记录：
+当现有方案明显复杂、存在根本矛盾或有多个候选方案时，先区分：
+
+```text
+事实 / 约束 / 假设 / 惯例
+```
+
+再做设计。
+
+### Architecture
+
+复杂架构变化按需明确：
+
+- 目标与约束
+- 模块边界
+- 数据流
+- 外部依赖
+- 核心接口
+- 失败路径
+- 关键取舍
+
+重大长期决策使用 ADR：
 
 ```text
 Context / Options / Decision / Reasons / Trade-offs
 ```
 
-普通实现细节不需要 ADR。
+### UI Spec
+
+前端开发前按需明确：
+
+- Target User
+- Information Architecture
+- Page / Route
+- User Flow
+- Layout / Component
+- Interaction
+- Empty / Loading / Error / Success State
+- Responsive Behavior
+- Design Token / Visual Direction
+- Reference Style（如有）
+
+避免由 LLM 在开发过程中临场自由发挥 UI。
 
 ---
 
-## 6. 文档创建
+## 6. Documentation Policy
 
 仅在实际需要时创建文档：
 
-- 缺少 `SPEC.md`：不擅自猜测需求。
-- 复杂架构变化：补充最小必要 Architecture。
-- 重大长期技术决策：创建 ADR。
-- 复杂多步骤任务：按需创建 Plan。
-- 简单修改：不额外创建文档。
+- 复杂需求：补充 `SPEC.md`
+- 复杂架构变化：补充 Architecture
+- 重要 UI / 交互设计：补充 `ui-spec.md`
+- 重大长期决策：创建 ADR
+- 跨模块、长链路或高风险任务：按需创建 Plan
+- 简单修改：不额外创建文档
+
+Plan 是临时执行资产，不作为永久知识库。
 
 避免为了流程完整而制造文档。
 
 ---
 
-## 7. 契约与数据写入
+## 7. Contracts, Data & Side Effects
 
-API、Tool、Event、Schema、数据库和外部集成应明确：
+API、Tool、Event、Schema、数据库和外部集成应按需明确：
 
 ```text
 Input / Output / Validation / Error / Permission
@@ -172,17 +215,17 @@ Breaking Change 必须明确说明，不得静默引入。
 - Rollback
 - Audit
 
-数据库结构变更通过 Migration 管理。
+数据库结构变更使用 Migration 管理。
 
 ---
 
-## 8. AI / Agent 规则
+## 8. AI / Agent Rules
 
-- LLM 负责推理，确定性代码负责权限、规则和安全约束。
+- LLM 负责推理；确定性代码负责权限、规则和安全约束。
 - Tool 必须有明确 Schema、Validation 和 Error Handling。
 - 权限和安全不能只依赖 Prompt。
-- 高风险或不可逆操作应经过 Policy / Approval / Human-in-the-loop。
 - 不基于模型猜测 Tool 执行结果或系统真实状态。
+- 高风险或不可逆操作应经过 Policy / Approval / Human-in-the-loop。
 - Prompt、Model、Workflow 变更后，应运行固定 Eval / Regression。
 - Agent / Workflow 应显式处理 State、Timeout、Retry、Fallback 和 Failure State。
 
@@ -194,9 +237,11 @@ Validation → Permission → Policy → Approval → Execution → Audit
 
 ---
 
-## 9. 测试
+## 9. Testing
 
-采用 **Risk-Based TDD**，优先覆盖：
+采用 **Risk-Based TDD + Adversarial Testing**。
+
+优先覆盖：
 
 - 核心业务逻辑
 - 权限与数据隔离
@@ -213,6 +258,19 @@ Validation → Permission → Policy → Approval → Execution → Audit
 失败测试 → 最小实现 → 测试通过 → 必要重构
 ```
 
+高风险边界主动挑战：
+
+- 权限与身份边界
+- 不可信或畸形输入
+- 非法状态跳转
+- 重复、乱序、并发请求
+- Tool 参数或返回异常
+- 外部依赖失败
+- Prompt Injection / Tool Misuse
+- 高风险或不可逆操作
+
+对抗性测试按风险执行，不为低风险修改制造无实际价值的测试。
+
 简单 UI、样式和低风险胶水代码不强制 TDD。
 
 禁止：
@@ -226,48 +284,40 @@ Validation → Permission → Policy → Approval → Execution → Audit
 
 ---
 
-## 10. 代码质量
+## 10. Code, Security & Dependencies
 
 遵循项目已有 Formatter、Linter、Type System、命名规范和目录结构。
 
 代码应：
 
-- 职责单一
-- 命名清晰
+- 职责清晰
+- 命名明确
 - 优先复用
 - 避免重复
 - 避免过早抽象
 - 不做无关重构
-- 不因个人偏好修改无关代码
 
----
+重要流程至少考虑：
 
-## 11. 错误、安全与权限
+```text
+Invalid Input
+Permission Denied
+Missing Data
+External Failure
+Timeout / Rate Limit
+Invalid Response
+Partial Failure
+```
 
-重要流程不能只实现 Happy Path，至少考虑：
+禁止：
 
-- Invalid Input
-- Permission Denied
-- Missing Data
-- External Failure
-- Timeout / Rate Limit
-- Invalid Response
-- Partial Failure / Retry Failure
-
-禁止静默吞掉异常。
-
-默认采用最小权限原则。禁止：
-
+- 静默吞掉异常
 - 硬编码 Secret / Token / Password
 - 默认信任外部输入
 - 绕过认证、授权或审批
 - 仅依赖 Prompt 实现权限控制
 - 在日志中记录不必要的敏感信息
 - 为解决依赖问题关闭 TLS、签名或完整性校验
-
----
-
-## 12. 依赖与镜像源
 
 新增依赖前确认：
 
@@ -276,16 +326,11 @@ Validation → Permission → Policy → Approval → Execution → Audit
 - 是否仍在维护
 - 是否增加明显复杂度或安全风险
 
-中国大陆网络环境下：
-
-- 优先使用可信的中国大陆软件源和镜像源。
-- 镜像不可用、版本滞后或校验失败时回退官方源。
-- 镜像配置放在环境或包管理器配置中，不硬编码到业务代码。
-- 镜像加速不替代可信来源和完整性校验。
+中国大陆网络环境下优先使用可信镜像源；不可用、版本滞后或校验失败时回退官方源。镜像配置不得硬编码到业务代码。
 
 ---
 
-## 13. 可观测性
+## 11. Observability & Release
 
 核心流程按需提供：
 
@@ -295,19 +340,22 @@ Validation → Permission → Policy → Approval → Execution → Audit
 - Error Reporting
 - Request / Trace ID
 
-日志应能回答：
+日志应帮助回答：
 
 ```text
-发生了什么？在哪里？为什么失败？如何追踪？
+发生了什么？
+在哪里失败？
+为什么失败？
+如何追踪？
 ```
 
-AI / Agent 场景按需记录 model、latency、token、route/node、tool call 和 final status。
+AI / Agent 场景按需记录：
+
+```text
+model / latency / token / route / node / tool call / final status
+```
 
 不得记录不必要的敏感数据。
-
----
-
-## 14. 发布与回滚
 
 影响部署、数据库、配置或外部契约的修改应考虑：
 
@@ -325,9 +373,24 @@ AI / Agent 场景按需记录 model、latency、token、route/node、tool call �
 
 ---
 
-## 15. 验证与完成标准
+## 12. Acceptance Criteria & Definition of Done
 
-按项目实际情况执行相关检查：
+### Acceptance Criteria
+
+回答：
+
+> 产品行为是否符合需求？
+
+至少关注：
+
+- 正常路径
+- 核心异常路径
+- 权限与边界
+- 明确业务结果
+
+### Definition of Done
+
+按项目实际情况执行：
 
 ```text
 Lint / Type Check / Unit Test / Contract Test
@@ -336,24 +399,24 @@ Integration Test / Build / E2E / AI Eval
 
 无需机械执行项目不存在或与本次修改无关的检查。
 
-任务完成前确认：
+完成前确认：
 
 - [ ] 满足明确需求
 - [ ] 未擅自扩大 Scope
 - [ ] Acceptance Criteria 已验证
 - [ ] 核心测试通过
-- [ ] 关键异常路径已验证
+- [ ] 高风险边界已按需进行对抗性验证
 - [ ] 无明显安全或权限问题
 - [ ] 无遗留调试代码
 - [ ] Breaking Change 已明确说明
 - [ ] 相关文档已同步
-- [ ] 可以说明实际执行的验证
+- [ ] 可以说明实际执行过的验证
 
-不得声称执行了未实际执行的命令或测试。
+不得声称执行了未实际执行的命令、测试或验证。
 
 ---
 
-## 16. 文档同步
+## 13. Documentation Sync
 
 只更新真正受影响的文档：
 
@@ -362,17 +425,18 @@ Integration Test / Build / E2E / AI Eval
 | 用户使用方式 | `README.md` |
 | 需求 / 产品行为 | `SPEC.md` |
 | 架构 | Architecture / ADR |
+| UI / 交互 | `ui-spec.md` |
 | API / Tool | Contract 文档 |
 | 部署方式 | Deployment / README |
 | 重要版本变化 | `CHANGELOG.md`（若使用） |
 
-README 优先让新人理解：
+README 优先帮助新人快速理解：
 
 1. 解决什么问题
 2. 为什么有价值，尽量可量化
 3. 核心能力
 4. Demo / Screenshot
-5. 架构或流程,为什么选择这样实现
+5. 架构或流程，以及为什么这样实现
 6. Quick Start
 7. 已知限制
 
@@ -380,28 +444,17 @@ README 优先让新人理解：
 
 ---
 
-## 17. Agent 行为准则
-
-始终：
-
-- 先理解，再修改
-- 明确重要假设
-- 优先最小可行改动
-- 保留现有合理设计
-- 主动发现风险和边界问题
-- 不隐藏错误
-- 不伪造结果
-- 不顺手修改无关代码
-- 不因追求完整而过度工程化
-
-最终原则：
+## 14. Final Rules
 
 ```text
 先理解，再编码。
-先明确需求，再设计。
-复杂功能先设计，再实现。
+先回到问题本质，再选择方案。
+以需求和契约为准。
+复杂功能先设计。
+优先最小可行改动和 Vertical Slice。
+对高风险边界主动找反例。
 测试真正重要的部分。
-验证后再宣布完成。
-保持需求、代码、测试和文档一致。
+实际验证后再宣布完成。
+保持需求、设计、代码、测试和文档一致。
 用最简单可靠的方案解决真实问题。
 ```

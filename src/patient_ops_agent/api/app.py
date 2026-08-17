@@ -238,7 +238,7 @@ def create_agent_app(
 
     @app.get("/api/v1/manual-tasks")
     async def manual_tasks(status: Optional[str] = None, operator_id: str = Depends(operator)):
-        return [_task_view(item) for item in store.list_manual_tasks(status)]
+        return [_task_view(item, store.get_run(item.run_id)) for item in store.list_manual_tasks(status)]
 
     @app.get("/api/v1/manual-tasks/{task_id}/context")
     async def manual_task_context(task_id: str, operator_id: str = Depends(operator)):
@@ -246,7 +246,7 @@ def create_agent_app(
         if not task: raise WorkflowError("INVALID_REQUEST", "manual task not found", 404)
         run = store.get_run(task.run_id)
         if not run: raise WorkflowError("INVALID_REQUEST", "run not found", 404)
-        return {"task": _task_view(task), "run": _run_view(run),
+        return {"task": _task_view(task, run), "run": _run_view(run),
                 "messages": [item.model_dump(mode="json") for item in run.conversation_messages],
                 "trace": [event.model_dump(mode="json") for event in store.get_trace(run.id)]}
 
@@ -256,7 +256,7 @@ def create_agent_app(
         if not task: raise WorkflowError("INVALID_REQUEST", "manual task not found", 404)
         if task.status is not ManualTaskStatus.OPEN: raise WorkflowError("INVALID_REQUEST", "task is not open")
         task.status = ManualTaskStatus.ASSIGNED; task.assigned_operator_id = operator_id
-        store.save_manual_task(task); return _task_view(task)
+        store.save_manual_task(task); return _task_view(task, store.get_run(task.run_id))
 
     @app.post("/api/v1/manual-tasks/{task_id}/resolve")
     async def resolve(task_id: str, body: ResolveTaskRequest, operator_id: str = Depends(operator),
@@ -266,7 +266,7 @@ def create_agent_app(
         if task.assigned_operator_id not in (None, operator_id): raise WorkflowError("FORBIDDEN", "task assigned to another operator", 403)
         task.status = ManualTaskStatus.RESOLVED; task.assigned_operator_id = operator_id
         task.resolution = body.resolution; task.completed_at = clock.now(); store.save_manual_task(task)
-        return _task_view(task)
+        return _task_view(task, store.get_run(task.run_id))
 
     @app.post("/api/v1/manual-tasks/{task_id}/messages")
     async def operator_reply(task_id: str, body: OperatorReplyRequest, operator_id: str = Depends(operator),
@@ -338,10 +338,12 @@ def _run_view(run):
         "last_error_code": run.last_error_code}
 
 
-def _task_view(task):
+def _task_view(task, run=None):
     return {"task_id": task.id, "run_id": task.run_id, "reason_code": task.reason_code,
             "status": task.status.value, "assigned_operator_id": task.assigned_operator_id,
-            "resolution": task.resolution}
+            "resolution": task.resolution, "created_at": task.created_at,
+            "masked_patient_id": _mask_patient_id(task.patient_id),
+            "intent": run.intent if run is not None else None}
 
 
 def _admin_run_summary(run):

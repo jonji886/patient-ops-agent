@@ -127,6 +127,9 @@ export interface ManualTask {
   status: "OPEN" | "ASSIGNED" | "RESOLVED" | "RETURNED_TO_AGENT" | "CANCELLED";
   assigned_operator_id: string | null;
   resolution: string | null;
+  created_at: string;
+  masked_patient_id?: string;
+  intent?: string | null;
 }
 
 export interface OperatorTaskContext {

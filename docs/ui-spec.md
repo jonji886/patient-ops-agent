@@ -1,6 +1,6 @@
 # Patient Ops Agent UI / UX 规格
 
-> 状态：设计基线已实施（2026-08-15；2026-08-16 修订：初始空态的固定意图入口改为点击直接发送，与会话中段 `suggested_replies` 的“仅填入”规则区分）  
+> 状态：设计基线已实施（2026-08-15；2026-08-16 修订：初始空态的固定意图入口改为点击直接发送，与会话中段 `suggested_replies` 的“仅填入”规则区分；2026-08-17 修订：Operator 工作台新人可用性——个案处理进度步骤条、任务队列展示创建时间 / 等待时长并自动轮询、任务 ID 收入折叠技术详情、执行记录支持分类筛选与异常默认展开）  
 > 范围：Channel Simulator、Operator View、按需展开的 Runtime / Trace。  
 > 事实来源：[`SPEC.md`](../SPEC.md)、[`docs/architecture.md`](architecture.md)、[`contracts/agent-api.yaml`](../contracts/agent-api.yaml)。发生冲突时以 `SPEC.md` 为准。
 
@@ -47,7 +47,7 @@ Patient Ops Agent 的界面是企业级患者预约交付工作台，而不是�
 | 患者工作台 | Patient | 完成本人的预约任务 | 会话、业务组件、输入区、患者可读状态与结果 |
 | Operator 个案工作台 | Operator | 领取并处理一个 Manual Task | 任务队列、脱敏 Run Context、处理说明、执行记录、交还 Agent |
 | Admin 运营管理工作台 | Admin | 先判断整体服务运行情况，再按需诊断一次或多次 Run | 运营总览、待关注事项、图表、Run 诊断、Trace Timeline、Audit Feed |
-| Manual Task 列表 | Operator | 找到待处理的人工接管 | 状态、原因、责任人、Run 摘要 |
+| Manual Task 列表 | Operator | 找到待处理的人工接管 | 状态、原因、责任人、脱敏患者与意图摘要、创建时间与已等待时长（中性事实，不断言超时） |
 | Operator Run Drawer | Operator | 在不脱离任务列表的情况下处理一个 Run | 接管上下文、Tool Execution、处理记录、交还 Agent |
 
 登录后由服务端返回的 `actor_role` 决定入口。Patient 不暴露管理能力；Operator 不获得跨任务患者访问；Admin 不获得患者业务写操作。
@@ -87,8 +87,10 @@ Admin
 
 - Patient 的状态只显示为可执行、患者可理解的业务文案，例如“请选择时段”“正在确认预约结果”“人工客服正在处理”；不得显示内部枚举或运行诊断。
 - Patient 的 Message、结构化业务卡和 Composer 共享 `max-width: 960px` 内容轨。进入 Run 后 Composer 固定在对话区底部；初始态遵循 3.4 的紧凑任务启动面板。
-- Operator 主区首先展示“患者说了什么”：仅显示当前 Manual Task 关联的患者消息、人工回复和最近系统回复，避免客服只看到抽象状态。未领取时可阅读上下文但不能发送；领取后提供“向患者回复”输入框和独立的“发送给患者”操作。
-- “发送给患者”只写入关联患者会话，不自动完成任务、交还 Agent 或触发预约写操作；应明确区分于“处理说明”和“交还 Agent”。Operator 的“交还 Agent”必须常驻说明旧 Confirmation 将失效、服务端重新加载事实且不会自动恢复未授权写入。
+- Operator 主区首先展示“患者说了什么”：仅显示当前 Manual Task 关联的患者消息、人工回复和最近系统回复，避免客服只看到抽象状态。未领取时可阅读上下文但不能发送，文案必须与此行为一致（“可先查看上下文；领取后才能回复患者或完成处理”）；领取后提供“向患者回复”输入框和独立的“发送给患者”操作。
+- “发送给患者”只写入关联患者会话，不自动完成任务、交还 Agent 或触发预约写操作；应明确区分于“处理说明”和“交还 Agent”，并在操作区以说明文字强调“记录处理完成”仅登记处理结论、不通知患者。Operator 的“交还 Agent”必须常驻说明旧 Confirmation 将失效、服务端重新加载事实且不会自动恢复未授权写入。
+- Operator 个案工作区在标题下方提供只读处理进度步骤条（领取任务 → 回复与处理 → 记录处理完成 → 交还 Agent），当前步骤高亮；它是 Manual Task 状态的纯展示映射，不引入客户端业务判断。任务摘要卡只展示会话区无法表达的信息（当前业务状态、执行归属、创建时间与已等待时长），不重复展示最近系统回复。
+- Manual Task 队列由前端低频轮询自动刷新；新任务出现时以常驻文字提示与计数变化告知（`aria-live`，不使用 Toast），不抢占当前选中任务。任务 ID、Run ID 等技术标识在 Task Context 中默认折叠为“技术详情”并配复制按钮，不作为一级信息。
 - Admin 默认显示由服务端返回的脱敏运营总览：关键指标、创建预约漏斗、按日趋势、状态 / 意图 / 错误分布和“现在需要关注什么”。运营总览不是客户端对 Audit 的猜测或 Mock；数据、统计口径和待关注类别均来自只读 `/api/v1/admin/dashboard`。
 - “现在需要关注什么”只显示服务端确定性识别出的等待人工、未完成、后续服务待处理和安全策略拒绝。每一项说明当前数量、影响和建议下一步，并可进入关联 Run 的只读诊断；没有定义 SLA 或目标时不得显示“超时”“低于目标”等断言。
 - Admin 的 Run、Trace 与 Audit 是诊断证据，位于“运行诊断”按需视图。事件、Workflow Step 与 Tool 名以中文业务说明为主，稳定内部代码仅在技术详情中披露；Trace 不挤压 Patient 的业务主线。
@@ -162,12 +164,13 @@ AppShell
 │   ├── RunNavigation（单会话可折叠）
 │   └── ConversationHeader / Feed / Business Cards / Composer
 ├── OperatorWorkspace（OPERATOR）
-│   ├── ManualTaskQueue
+│   ├── ManualTaskQueue（自动轮询 + 新任务提示）
 │   ├── OperatorCaseWorkspace
+│   │   ├── CaseProgressSteps（只读处理进度）
 │   │   ├── AuthorizedRunContext
 │   │   ├── ResolutionForm / ReturnToAgentConfirmation
 │   │   └── TraceTimeline
-│   └── TaskContextPanel
+│   └── TaskContextPanel（技术详情默认折叠 + 复制）
 └── AdminWorkspace（ADMIN，只读）
     ├── AdminOverview（默认）
     │   ├── KpiCards / ActionItems
@@ -194,7 +197,9 @@ AppShell
 | `BusinessResultCard` | Appointment 最终状态、预约摘要、结果说明 | 仅 `core_business_status = SUCCEEDED` 且核验完成后显示“预约已成功 / 预约已取消” |
 | `SideEffectStatus` | Writeback、Notification 的独立状态 | 使用两行状态，不把 `RETRY_SCHEDULED` 覆盖成整体失败 |
 | `RuntimeStatus` | Run Status、Workflow Step、Intent、Attempts | 人类文案优先；Workflow Step 作为解释用次级信息，不把技术 ID 做视觉标题 |
-| `TraceTimeline` | 有序 Trace Event、时间、节点、Tool、结果、耗时 | 默认摘要；原始样式的详情只在展开时显示，且必须脱敏 |
+| `ManualTaskQueue` | 任务状态、原因、责任人、脱敏患者与意图摘要、创建时间与已等待时长 | 每项是选择任务的按钮；已等待时长是中性事实，不显示“超时”等 SLA 断言；队列自动轮询刷新 |
+| `CaseProgressSteps` | 领取任务 → 回复与处理 → 记录处理完成 → 交还 Agent | 只读步骤条；`CANCELLED` 显示取消说明；当前步骤使用 `aria-current="step"` |
+| `TraceTimeline` | 有序 Trace Event、时间、节点、Tool、结果、耗时 | 默认摘要；原始样式的详情只在展开时显示，且必须脱敏；人工接管、策略拒绝与结果未知事件默认展开一层 |
 | `HandoffBanner` | 接管事实、原因、Manual Task 状态、当前所有者 | 常驻在对话标题下方；说明 Agent 已暂停自动执行，但不替代 Composer；不是可关闭 Toast |
 | `AccountMenu` | 当前演示身份、切换身份、退出登录 | 仅展示服务端返回的非敏感名称和角色；关闭时将焦点归还触发按钮 |
 | `AccountSwitchDialog` | 演示身份、密码、切换影响、错误状态 | 提交前说明原 Run 不被取消；切换成功后清空浏览器内存会话，不显示或存储 Token |

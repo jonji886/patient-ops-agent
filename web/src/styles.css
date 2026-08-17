@@ -226,6 +226,21 @@ textarea { min-height: 48px; resize: vertical; }
 .role-trace-dot { z-index: 1; width: 13px; height: 13px; margin-top: 3px; border: 3px solid #d1d5db; border-radius: 50%; background: #6b7280; }
 .role-trace-dot--success { border-color: #a7f3d0; background: #047857; }.role-trace-dot--danger { border-color: #fecaca; background: #b91c1c; }.role-trace-dot--warning { border-color: #fde68a; background: #a16207; }.role-trace-dot--info { border-color: #bfdbfe; background: #2563eb; }
 .role-trace-list strong { color: #374151; font-size: 13px; }.role-trace-list p, .role-trace-list time { display: block; margin: 3px 0; color: #6b7280; font-size: 12px; }
+.role-trace-details { margin-top: 6px; }
+.role-trace-details summary { cursor: pointer; color: #4b5563; font-size: 12px; }
+.case-steps { margin: 18px 0 0; }
+.case-steps ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.case-steps__step { display: flex; min-width: 0; align-items: center; gap: 8px; color: #94a3b8; }
+.case-steps__step > span { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; border: 1px solid #cbd5e1; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 700; }
+.case-steps__step strong { overflow: hidden; color: #64748b; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.case-steps__step--done, .case-steps__step--active { color: #1d4ed8; }
+.case-steps__step--done > span { border-color: #86efac; background: #dcfce7; color: #047857; }
+.case-steps__step--active > span { border-color: #2563eb; background: #2563eb; color: #fff; }
+.case-steps__step--done strong, .case-steps__step--active strong { color: #1e3a5f; }
+.case-actions__hint { margin: 0; color: #6b7280; font-size: 12px; line-height: 1.5; }
+.case-summary small { color: #a16207; font-size: 12px; }
+.copy-button { margin-left: 6px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; color: #4b5563; padding: 1px 6px; font-size: 11px; }
+.copy-button:hover { background: #f3f4f6; color: #111827; }
 .audit-feed > h2 { margin-top: 0; }.audit-feed ol { display: grid; gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; }
 .audit-feed li { display: grid; gap: 3px; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px; }.audit-feed strong { color: #374151; font-size: 13px; overflow-wrap: anywhere; }.audit-feed span, .audit-feed time { color: #6b7280; font-size: 12px; }
 .admin-tabs { display: flex; gap: 4px; border-bottom: 1px solid #dfe3e8; background: #fff; padding: 0 20px; }
@@ -322,7 +337,7 @@ textarea { min-height: 48px; resize: vertical; }
   .composer { padding: 10px 14px 14px; }
   .composer__suggestions { display: grid; gap: 4px; }.composer__suggestions > span { padding-top: 0; }.composer__suggestions > div { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }.quick-reply { white-space: nowrap; }
   .summary-grid { grid-template-columns: 1fr; }
-  .booking-progress ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .booking-progress ol, .case-steps ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .service-option-list, .date-option-list { grid-template-columns: 1fr; }
   .appointment-detail dl { grid-template-columns: 1fr; }
   .appointment-option { align-items: flex-start; flex-direction: column; gap: 10px; }

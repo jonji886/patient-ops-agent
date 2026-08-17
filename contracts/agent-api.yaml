@@ -790,6 +790,9 @@ components:
           enum: [OPEN, ASSIGNED, RESOLVED, RETURNED_TO_AGENT, CANCELLED]
         assigned_operator_id: {type: string, nullable: true}
         resolution: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        masked_patient_id: {type: string, description: 脱敏后的患者标识，例如 P•••1}
+        intent: {type: string, nullable: true, description: 关联 Run 的意图；未解析时为 null}
     OperatorTaskContext:
       type: object
       required: [task, run, messages, trace]

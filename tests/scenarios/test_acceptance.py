@@ -358,7 +358,7 @@ async def test_repeated_natural_request_does_not_create_second_appointment(sut):
 
 @pytest.mark.asyncio
 async def test_follow_up_recommends_cleaning_and_guides_to_date_selection(sut):
-    """随访/召回最小垂直切片：患者事实 last_cleaning_date 距今约 6 个月，应推荐洗牙复查并引导选日期，全程无写操作。"""
+    """Recall 闭环：患者事实 last_cleaning_date 距今约 6 个月，应评估为 ELIGIBLE 并推荐洗牙复查，引导选日期，全程无写操作。"""
     conversation = await sut.conversation()
     response = await sut.send(conversation, "我想复查洗牙", "msg-follow-up")
     assert response.status_code == 202
@@ -369,18 +369,20 @@ async def test_follow_up_recommends_cleaning_and_guides_to_date_selection(sut):
     assert run["run_status"] == "WAITING_PATIENT"
     assert run["action_required"] == "DATE_SELECTION"
     assert run["service_item_name"] == "洗牙"
+    assert run["recall_status"] == "OUTREACHED"
+    assert run["next_best_action"] == "RECOMMEND_DENTAL_CLEANING_REVIEW"
     assert "6 个月" in run["current_reply"]
     assert run["candidate_dates"] == [
         {"date": "2026-08-15", "available_slot_count": 2},
         {"date": "2026-08-16", "available_slot_count": 1},
     ]
     assert not [item for item in sut.store.tool_executions if item.tool_name == "create_appointment"]
-    assert any(event.event == "follow_up_recommendation_made" for event in sut.store.get_trace(run["run_id"]))
+    assert any(event.event == "recall_eligible_outreach" for event in sut.store.get_trace(run["run_id"]))
 
 
 @pytest.mark.asyncio
 async def test_follow_up_not_yet_due_does_not_recommend(sut):
-    """距上次洗牙不足 5 个月时，随访应给出确定性降级回复，不预填服务也不触发写操作。"""
+    """距上次洗牙不足 5 个月时，召回应给出确定性降级回复，不预填服务也不触发写操作。"""
     sut.patient_data.patients["P1001"]["facts"] = [
         {"id": "F1002", "fact_type": "last_cleaning_date", "value": "2026-08-01", "source": "synthetic_patient_ops"}
     ]
@@ -390,23 +392,25 @@ async def test_follow_up_not_yet_due_does_not_recommend(sut):
     assert run["intent"] == "FOLLOW_UP"
     assert run["action_required"] == "NONE"
     assert run["service_item_name"] is None
+    assert run["recall_status"] == "SKIPPED"
     assert "暂未到常规复查周期" in run["current_reply"]
     assert sut.store.tool_executions == []
-    assert any(event.event == "follow_up_not_yet_due" for event in sut.store.get_trace(run["run_id"]))
+    assert any(event.event == "recall_not_eligible" for event in sut.store.get_trace(run["run_id"]))
 
 
 @pytest.mark.asyncio
 async def test_follow_up_without_facts_degrades_gracefully(sut):
-    """患者没有可用事实时，随访回复应优雅降级而非报错。"""
+    """患者没有可用事实时，召回回复应优雅降级而非报错。"""
     sut.patient_data.patients["P1001"]["facts"] = []
     conversation = await sut.conversation()
     run = (await sut.send(conversation, "我想回访", "msg-follow-up-no-facts")).json()["run"]
 
     assert run["intent"] == "FOLLOW_UP"
     assert run["action_required"] == "NONE"
+    assert run["recall_status"] == "SKIPPED"
     assert "没有找到适合您的复查建议" in run["current_reply"]
     assert sut.store.tool_executions == []
-    assert any(event.event == "follow_up_no_applicable_fact" for event in sut.store.get_trace(run["run_id"]))
+    assert any(event.event == "recall_not_eligible" for event in sut.store.get_trace(run["run_id"]))
 
 
 @pytest.mark.asyncio
@@ -438,6 +442,7 @@ async def test_follow_up_can_complete_full_booking_through_existing_pipeline(sut
     confirmed = (await sut.confirm(confirmation_run, "follow-up-confirm")).json()
     assert confirmed["core_business_status"] == "SUCCEEDED"
     assert confirmed["writeback_status"] == "PENDING"
+    assert confirmed["recall_status"] == "CONVERTED"
     matches = [item for item in sut.clinic_data.appointments.values() if item["patient_id"] == "P1001"]
     assert len(matches) == 1
     assert matches[0]["service_item_id"] == "SV-CLEANING"

@@ -50,8 +50,25 @@ Patient Ops Agent 证明了一个核心命题：
 | Unauthorized Tool Execution | **0** | 0 | 越权请求和 Prompt 注入攻击零得逞 |
 | Idempotency / Reconciliation Pass Rate | **100%** | 100% | 重复点击、网络重试不会产生重复业务结果 |
 | Deterministic State Transition Pass Rate | **100%** | 100% | 流程每一步都在预期状态内，可审计可追溯 |
+| Recall Conversion Rate | **100%** | ≥95% | 满足召回条件的患者可沿既有管线完成预约 |
 
 > 指标仅描述仓库内 Synthetic Dataset 和 Mock 系统，不代表真实医疗生产表现。
+
+### 业务指标（企业级 Agent 评估口径）
+
+项目不只展示"LLM Response Accuracy"，更优先展示业务完成和可靠性指标：
+
+| 业务指标 | 结果 | 说明 |
+|---|---:|---|
+| Task Completion Rate | 100% | 正常路径预约全流程可走通 |
+| Appointment Success Rate | 100% | 创建的预约全部核验为 CONFIRMED |
+| Duplicate Appointment Rate | 0% | 超时、重复请求均不产生重复预约 |
+| Human Handoff Rate | 按场景触发 | 高风险场景自动转人工，不硬来 |
+| Tool Failure Rate | 0%（正常路径） | 写操作全部成功核验 |
+| Reconciliation Success Rate | 100% | 超时后对账全部恢复原结果 |
+| Recall Conversion Rate | 100% | 满足召回条件的患者完成预约后 `recall_status=CONVERTED` |
+
+模型指标作为第二层（Intent Accuracy、Entity Accuracy、Structured Output Valid Rate），见 [Real LLM Evaluation](#real-llm-evaluation)。
 
 ### 业务结果假设
 
@@ -204,7 +221,7 @@ curl -sS -X POST http://localhost:8000/api/v1/conversations \
 
 ## 演示脚本
 
-场景 1 / 4 / 6 可直接在页面操作复现；场景 2 / 3 / 5 依赖故障注入（`timeout_after_commit_once`、连续上游失败、通知失败），**演示 UI 不提供故障开关**，请通过自动化测试复现，链接见表末。
+场景 1 / 4 / 6 / 7 可直接在页面操作复现；场景 2 / 3 / 5 依赖故障注入（`timeout_after_commit_once`、连续上游失败、通知失败），**演示 UI 不提供故障开关**，请通过自动化测试复现，链接见表末。
 
 | # | 场景 | 操作 | 预期结果 |
 |---|---|---|---|
@@ -214,8 +231,105 @@ curl -sS -X POST http://localhost:8000/api/v1/conversations \
 | 4 | 修改确认参数 | 确认卡生成后输入"改为后天上午" | 旧 Confirmation 为 `INVALIDATED`，需重新确认 |
 | 5 | 通知失败（测试复现） | 核心预约成功，通知失败 | Appointment 保持 `CONFIRMED`，Run 为 `COMPLETED_WITH_PENDING_SIDE_EFFECTS` |
 | 6 | 替代号源 | 输入无号源的日期 → 问"有哪些日期可约" | 返回未来 7 天候选 → 选择并确认 |
+| 7 | 患者召回 | 输入"我想复查洗牙" → 选择日期 → 确认 | `recall_status` 从 `OUTREACHED` → `CONVERTED`，回写包含召回状态 |
 
-自动化版本见 [验收场景测试](tests/scenarios/test_acceptance.py)。
+自动化版本见 [验收场景测试](tests/scenarios/test_acceptance.py) 和 [召回场景测试](tests/scenarios/test_recall.py)。
+
+---
+
+## 关键 Failure Case（企业级 Agent 为什么不是 Chatbot）
+
+以下两个场景是本项目最重要的工程价值证明。它们解释了"为什么普通 Retry 会产生重复预约"和"为什么人工接管不是一条聊天消息"。
+
+### Failure Case 1：创建预约超时后为什么不产生重复预约
+
+```text
+Create Appointment
+↓
+Clinic Core 服务端 Commit 成功（Appointment 已创建）
+↓
+HTTP Response 丢失 / 客户端超时
+↓
+Agent 收到 outcome = UNKNOWN
+↓
+进入 Reconciliation（不是 Blind Retry）
+↓
+使用同一 operation_id 查询 get_operation_result
+↓
+找到已成功的 Appointment
+↓
+恢复原 appointment_id，不创建第二个
+↓
+recall_status = CONVERTED（如果是 Recall 触发的）
+```
+
+**为什么普通 Retry 会产生重复预约**：如果 Agent 在超时后盲目重试，它不会知道服务端已经创建了预约。第二次请求可能命中另一个号源，或者因为幂等键不匹配而创建第二个预约。本项目的解法是：**超时后锁定 Operation，先对账再决定**，同一 Operation 的所有重试复用相同幂等键。
+
+验证：`test_ac04_timeout_after_commit_reconciles_without_duplicate`
+
+### Failure Case 2：人工接管是执行权限变化，不是聊天消息
+
+```text
+患者请求人工 / Agent 重试耗尽
+↓
+创建 Manual Task（OPEN）
+↓
+execution_owner = OPERATOR（原子转移）
+↓
+Agent 的所有写 Tool 被 Policy 拒绝
+↓
+患者仍可在原会话发送补充消息（消息进入任务级记录）
+↓
+Operator 领取任务、查看脱敏上下文、回复患者
+↓
+Operator 记录处理结果并交还 Agent
+↓
+execution_owner = AGENT
+↓
+旧 Confirmation 失效，Agent 从服务器事实重建
+```
+
+**为什么人工接管不是一条聊天消息**：如果人工接管只是发送一条"已转人工"的消息，Agent 仍然可以继续调用写 Tool，可能与人工操作冲突。本项目的解法是：**`execution_owner` 是数据库中的权威状态，Tool Executor 每次执行前检查**，不依赖 Prompt 或消息。
+
+验证：`test_ac07_retry_exhaustion_transfers_execution_to_operator`、`test_manual_task_can_be_assigned_resolved_and_returned`
+
+---
+
+## 架构故事（面试视角）
+
+### Why — 为什么普通 Chatbot 无法承担患者运营任务？
+
+传统 AI 客服只会"聊天回答问题"。但真实的医疗业务 Agent 必须能**安全地完成写操作**——创建、查询、取消预约，并处理写操作特有的风险：超时后重复预约、号源并发竞争、通知失败导致业务回滚、Agent 失败后无人接管。普通 Chatbot 没有状态机、没有确认机制、没有幂等保证、没有人工接管，无法承担这些责任。
+
+### What — 这个系统解决什么业务问题？
+
+让患者用自然语言就能完成预约闭环，同时保证：不重复预约、不越权操作、出事有人工兜底、核心业务成功不被外围通知失败回滚。它证明：**AI 可以安全地替患者完成真实写操作**。
+
+### How — 为什么采用 LLM + State Machine + Policy + Tool Executor？
+
+| 层 | 职责 | 为什么不能交给 LLM |
+|---|---|---|
+| LLM | 理解自然语言、结构化输出 | LLM 不擅长可靠遵守业务规则，会"忘记"确认、误判权限 |
+| State Machine | 控制流转、中断、恢复 | 状态流转必须确定性，不能由模型"心情"决定 |
+| Policy | 身份、归属、权限、确认校验 | 安全约束不能依赖 Prompt，Prompt Injection 可绕过 |
+| Tool Executor | 幂等执行、结果核验、审计 | HTTP 200 ≠ 业务成功，必须二次核验 |
+
+**核心命题**：LLM 负责理解；确定性代码负责决策、执行和安全约束。
+
+### Failure — 异常路径怎么处理？
+
+| 异常 | 解法 | 验证 |
+|---|---|---|
+| API Timeout | `UNKNOWN` → Reconciliation，不盲目重试 | AC-04 |
+| 重复请求 | 活跃 Run 去重 + 数据库唯一约束 + 创建前查询 | 重复请求测试 |
+| 号源竞争 | 乐观版本冲突，只有一个能约上 | AC-05 |
+| 通知失败 | Outbox 独立重试，不回滚核心预约 | AC-06 |
+| 人工接管 | `execution_owner` 原子转移，Agent 写权限被阻断 | AC-07 |
+| 越权 / Prompt Injection | Policy 无条件返回 `FORBIDDEN`，不依赖模型 | AC-08 |
+
+### Measure — 怎么判断 Agent 是否成功？
+
+见下方业务指标。核心原则：**任务完成率和重复预约数为 0 比模型准确率更重要**。
 
 ---
 
@@ -415,16 +529,45 @@ python3 -m pip install '.[dev]'
 python3 -m pytest -q
 ```
 
-当前共 **109 条自动化测试**（`pytest --collect-only` 实测），覆盖：
+当前共 **122 条自动化测试**（`pytest --collect-only` 实测），覆盖：
 
-- Unit / State / Policy（确定性，不调真实 LLM）
+- Unit / State / Policy / Recall Eligibility（确定性，不调真实 LLM）
 - NLU Golden Cases（30 条意图+实体）
 - 跨服务 Integration（HTTP 边界、故障注入）
-- E2E / 异常场景（SPEC AC-01 至 AC-09）
+- E2E / 异常场景（SPEC AC-01 至 AC-09 + Recall 场景）
 - API Contract（OpenAPI Schema、幂等重放）
 - 浏览器 E2E（10 条真实 API）
 
-> 注意区分两个数字：上文指标表基于评测报告口径的固定 Synthetic 测试集（见 [docs/evaluation.md](docs/evaluation.md)）；109 是当前仓库自动化测试用例总数，两者统计对象不同。
+> 注意区分两个数字：上文指标表基于评测报告口径的固定 Synthetic 测试集（见 [docs/evaluation.md](docs/evaluation.md)）；122 是当前仓库自动化测试用例总数，两者统计对象不同。
+
+### Real LLM Evaluation
+
+确定性 CI 测试验证系统工程逻辑；Real LLM Evaluation 测量真实模型能力和不稳定性。两者必须分离：
+
+```
+Deterministic CI = 验证系统工程逻辑正确（不依赖网络和模型）
+Real LLM Evaluation = 测量真实模型能力和不稳定性（需要 API Key）
+```
+
+运行真实模型评测（默认不进入 CI，无 API Key 不会导致测试失败）：
+
+```bash
+export LLM_PROVIDER=deepseek
+export DEEPSEEK_API_KEY=your-key
+export DEEPSEEK_MODEL=deepseek-chat
+
+python3 -m patient_ops_agent.eval_runner
+```
+
+评测 30 条 Golden Cases（[`data/eval/llm_golden_cases.yaml`](data/eval/llm_golden_cases.yaml)），输出 JSON + Markdown 报告到 `reports/` 目录。指标包括：
+
+- Intent Accuracy / Entity Extraction Accuracy
+- Structured Output Valid Rate
+- Fallback Rate（UNKNOWN 意图比例）
+- Latency P50 / P95
+- 按类别分类准确率
+
+> 评测结果受模型版本、网络和 Prompt 影响而波动，不外推到真实医疗生产环境。
 
 前端构建与 E2E：
 
@@ -456,6 +599,7 @@ npm run test:e2e
 patient-ops-agent/
 ├── SPEC.md                    # 需求、范围、验收标准（事实来源）
 ├── CONTEXT.md                 # 领域术语
+├── AGENTS.md                  # AI 协作规范
 ├── contracts/                 # OpenAPI 契约
 ├── docs/
 │   ├── architecture.md        # 技术架构设计
@@ -465,19 +609,22 @@ patient-ops-agent/
 ├── data/synthetic/            # 虚构测试数据
 ├── infra/                     # PostgreSQL Migration
 ├── src/patient_ops_agent/     # Agent 核心代码
-│   ├── api/                   # HTTP 路由、Command、Views
-│   ├── workflow/              # LangGraph 工作流、状态、节点
-│   ├── domain/                # 领域模型、事件、枚举
-│   ├── policy/                # 权限与确认规则
-│   ├── tools/                 # Tool Registry、Executor、脱敏
-│   ├── ports/                 # 领域级接口（Provider Port）
-│   ├── gateways/              # HTTP 适配器
-│   ├── llm/                   # DeepSeek Adapter、Prompt、Schema
-│   ├── persistence/           # Repository、Checkpoint、UnitOfWork
-│   ├── workers/               # Outbox Worker、Reconciliation
-│   └── observability/         # Log、Metric、Trace
-├── services/                  # Patient Ops Mock + Clinic Core Mock
-├── tests/                     # unit / integration / scenarios / golden
+│   ├── api/                   # FastAPI 路由、Command、Views
+│   ├── workflow/              # AgentWorkflow（理解路由、确认、执行、对账）
+│   ├── domain/                # 领域模型 + InMemoryStore
+│   ├── policy/                # 确定性 PolicyEngine
+│   ├── gateways/              # HTTP Gateway（ClinicCore / PatientOps）
+│   ├── llm/                   # Provider Port + DeepSeek / RuleBased / Fake
+│   ├── mocks/                 # Clinic Core Mock + Patient Ops Mock
+│   ├── persistence/           # SQLiteStore / PostgresStore
+│   ├── models/                # 跨层共享 Pydantic Schema
+│   ├── clock.py               # Clock Port（Fixed / System）
+│   ├── security.py            # ActorContext + Synthetic Token
+│   ├── settings.py            # 配置
+│   ├── main.py                # 组合根
+│   ├── worker.py              # Outbox Worker
+│   └── token_cli.py           # Token 命令行工具
+├── tests/                     # unit / integration / scenarios / golden / contract
 └── web/                       # React 前端
 ```
 
@@ -487,6 +634,7 @@ patient-ops-agent/
 
 - 产品规格：[`SPEC.md`](SPEC.md)
 - 领域术语：[`CONTEXT.md`](CONTEXT.md)
+- AI 协作规范：[`AGENTS.md`](AGENTS.md)
 - 技术架构：[`docs/architecture.md`](docs/architecture.md)
 - API 契约：[`contracts/`](contracts/README.md)
 - UI 设计：[`docs/ui-spec.md`](docs/ui-spec.md)
@@ -505,10 +653,11 @@ patient-ops-agent/
 
 当前 MVP 的边界已按优先级整理为可执行的路线图；每一期都延续同一架构承诺——**确定性代码兜底，变更可验证、可回滚**。
 
-### P0 — 已落地：随访 / 召回（最小垂直切片）
+### P0 — 已落地：随访 / 召回（完整闭环）
 
-- 基于 Patient Facts（`last_cleaning_date`）的复查推荐已实现：患者说"复查 / 随访 / 回访"，Agent 读取事实，距上次洗牙 ≥5 个月则预填洗牙服务并引导走既有预约管线；未到期或缺事实则确定性降级，不擅自发起写操作
-- 实现：`Intent.FOLLOW_UP` + `_handle_follow_up()` + `PatientOpsGateway.facts()`；测试：`test_follow_up_*`（4 条场景）
+- 基于 Patient Facts（`last_cleaning_date`）的复查推荐已实现完整闭环：确定性 `RecallEligibilityRule` 评估召回资格（距上次洗牙 ≥5 个月 + 触达许可 + 无未来预约）→ 生成 Next Best Action → 患者接受/拒绝/人工 → 复用既有预约管线 → 预约成功后回写 `recall_status=CONVERTED`
+- LLM 不决定召回资格；召回规则由确定性代码强制
+- 实现：`domain/recall.py`（`RecallEligibilityRule` + `RecallStatus`）+ `workflow/service.py._handle_follow_up()`；测试：`test_recall_eligibility.py`（8 条单元）+ `test_recall.py`（5 条场景）
 
 ### P1 — 近期：触达渠道与改期
 

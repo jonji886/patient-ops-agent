@@ -153,10 +153,33 @@ MVP 必须形成以下纵向闭环：
 
 - 修改预约 / 改期 Saga；
 - 号源短期锁定 `SlotHold`；
-- 简单诊后随访；
-- 患者召回与 Next Best Action 驱动；
+- ~~简单诊后随访~~ → **已实现完整 Recall 闭环**（见下方）；
+- ~~患者召回与 Next Best Action 驱动~~ → **已实现**（见下方）；
 - 企业微信、400、SCRM 或 RPA 的真实适配器；
 - Redis 分布式锁与高并发优化。
+
+#### 已实现：患者召回（Recall）完整闭环
+
+基于 Patient Facts 的确定性召回资格判定 + Next Best Action + 既有预约管线复用 + 结果回写：
+
+```text
+Patient Facts (last_cleaning_date)
+→ RecallEligibilityRule（确定性代码）
+→ Eligible / Not Eligible / Skip
+→ Next Best Action: RECOMMEND_DENTAL_CLEANING_REVIEW
+→ Patient Outreach（recall_status = OUTREACHED）
+→ Patient Reply（接受 / 拒绝 / 人工）
+→ Appointment Workflow（复用既有管线）
+→ Appointment Created
+→ Patient Ops Writeback（recall_status = CONVERTED）
+```
+
+召回规则由确定性代码强制，LLM 不决定召回资格：
+- 距上次洗牙 ≥5 个月
+- 允许触达（ContactConsent）
+- 当前不存在有效洗牙预约
+
+异常覆盖：Not Yet Due、No Patient Facts、Contact Consent Denied、Skip（已有预约）、Declined、Human Handoff、Timeout After Commit。
 
 ### 4.3 非目标
 

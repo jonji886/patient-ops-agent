@@ -106,6 +106,8 @@ class AgentRun(BaseModel):
     last_error_code: Optional[str] = None
     last_error_message: Optional[str] = None
     manual_task_id: Optional[str] = None
+    recall_status: Optional[str] = None
+    next_best_action: Optional[str] = None
     current_reply: Optional[str] = None
     current_reply_author: Literal["AGENT", "OPERATOR"] = "AGENT"
     conversation_messages: List[ConversationMessage] = Field(default_factory=list)

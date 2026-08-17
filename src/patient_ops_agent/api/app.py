@@ -335,7 +335,8 @@ def _run_view(run):
         "writeback_status": run.writeback_status.value, "notification_status": run.notification_status.value,
         "manual_task_id": run.manual_task_id, "candidate_slots": run.candidate_slots,
         "candidate_appointments": run.candidate_appointments, "attempt_count": run.attempt_count,
-        "last_error_code": run.last_error_code}
+        "last_error_code": run.last_error_code,
+        "recall_status": run.recall_status, "next_best_action": run.next_best_action}
 
 
 def _task_view(task, run=None):

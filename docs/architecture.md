@@ -1246,69 +1246,47 @@ PostgreSQL Ready
 
 ## 20. 代码映射
 
+以下是仓库当前的真实代码结构。架构文档只描述已落地的模块；尚未实现的能力记录在 [演进路线](../README.md#演进路线) 中，不在此处虚构。
+
 ```text
 src/patient_ops_agent/
 ├── api/
-│   ├── patient_routes.py
-│   ├── operator_routes.py
-│   ├── dependencies.py
-│   └── views.py
+│   └── app.py                # FastAPI 路由：Patient / Operator / Admin Commands + Views
 ├── workflow/
-│   ├── graph.py
-│   ├── state.py
-│   ├── events.py
-│   ├── routing.py
-│   └── nodes/
+│   └── service.py            # AgentWorkflow：理解路由、确认、执行、对账、副作用、接管
 ├── domain/
-│   ├── appointments.py
-│   ├── confirmations.py
-│   ├── operations.py
-│   ├── handoff.py
-│   └── errors.py
+│   ├── models.py             # AgentRun、Confirmation、ManualTask、OutboxEvent、TraceEvent 等
+│   └── store.py              # InMemoryStore（线程安全 Repository 抽象）
 ├── policy/
-│   ├── engine.py
-│   └── rules.py
-├── tools/
-│   ├── contracts.py
-│   ├── registry.py
-│   ├── executor.py
-│   └── redaction.py
-├── ports/
-│   ├── patient_ops.py
-│   ├── clinic_core.py
-│   ├── understanding.py
-│   ├── clock.py
-│   └── ids.py
+│   └── engine.py             # 确定性 PolicyEngine：身份、归属、确认、执行权
 ├── gateways/
-│   ├── patient_ops_http.py
-│   └── clinic_core_http.py
+│   └── http.py               # ClinicCoreGateway + PatientOpsGateway + GatewayError
 ├── llm/
-│   ├── deepseek.py
-│   ├── prompts.py
-│   └── schemas.py
+│   ├── ports.py              # UnderstandingProvider Protocol + UnderstandingRequest
+│   ├── fake.py               # FakeUnderstandingProvider（测试替身）
+│   ├── rule_based.py         # RuleBasedUnderstandingProvider（默认确定性中文理解器）
+│   └── deepseek.py           # DeepSeekUnderstandingProvider（真实 LLM Adapter）
+├── mocks/
+│   ├── clinic_core.py        # Clinic Core Mock 应用 + 数据
+│   ├── patient_ops.py        # Patient Ops Mock 应用 + 数据
+│   ├── persistence.py        # Mock 服务的 SQLite/PostgreSQL 持久化
+│   ├── fixtures.py           # Synthetic Fixtures 加载
+│   └── errors.py             # Mock 统一错误响应
 ├── persistence/
-│   ├── repositories.py
-│   ├── unit_of_work.py
-│   ├── checkpoint.py
-│   └── models.py
-├── workers/
-│   ├── outbox.py
-│   └── reconciliation.py
-├── observability/
-│   ├── logging.py
-│   ├── metrics.py
-│   └── tracing.py
-└── settings.py
+│   └── sql.py                # SQLiteStore + PostgresStore（实现 InMemoryStore 接口）
+├── models/                   # 跨层共享 Pydantic Schema（非 Domain Entity）
+│   ├── agent.py              # RunStatus / ExecutionOwner / WorkflowStep / RunView
+│   ├── common.py             # Appointment / Slot / OperationResult / ErrorResponse
+│   └── understanding.py      # Intent / ProposedAction / UnderstandingResult
+├── clock.py                  # Clock Port：FixedClock / SystemClock / runtime_clock
+├── security.py               # ActorContext + Synthetic Token 签发与验证
+├── settings.py               # Pydantic Settings + 配置校验
+├── main.py                   # 组合根：build_app() + uvicorn 入口
+├── worker.py                 # OutboxWorker + NotificationSender
+└── token_cli.py              # patient-ops-token 命令行工具
 ```
 
-Mock 服务保持独立应用：
-
-```text
-services/patient_ops_mock/
-services/clinic_core_mock/
-```
-
-共享内容仅限无业务行为的 Contract / Test Utilities。禁止让 Agent 与 Mock 服务共享 ORM Model，否则会绕过 HTTP 边界并掩盖集成错误。
+Mock 服务内嵌于同一包（`mocks/`），在 SQLite 本地 Profile 中通过 ASGI Transport 同进程运行，在 PostgreSQL 部署 Profile 中作为独立进程运行。两者使用同一套 HTTP Gateway 契约，不共享 ORM Model。
 
 ---
 

@@ -29,6 +29,9 @@ var/
 .coverage
 htmlcov/
 
+# Real LLM Evaluation reports (generated, not version-controlled)
+reports/
+
 # Local runtime data
 runtime/
 tmp/

@@ -21,6 +21,7 @@ from patient_ops_agent.domain.models import (
     ToolExecution,
     TraceEvent,
 )
+from patient_ops_agent.domain.recall import RecallEligibility, RecallEligibilityRule, RecallStatus
 from patient_ops_agent.domain.store import InMemoryStore
 from patient_ops_agent.gateways import ClinicCoreGateway, GatewayError, PatientOpsGateway
 from patient_ops_agent.llm import UnderstandingProvider, UnderstandingRequest
@@ -61,6 +62,7 @@ class AgentWorkflow:
         self.clock = clock
         self.confirmation_ttl_seconds = confirmation_ttl_seconds
         self.max_retry_attempts = max_retry_attempts
+        self.recall_rule = RecallEligibilityRule()
         self._last_audited_state: Dict[str, Dict[str, Any]] = {}
 
     async def create_conversation(self, actor: ActorContext, channel: str) -> Conversation:
@@ -100,6 +102,19 @@ class AgentWorkflow:
             intent = Intent.CREATE_APPOINTMENT
         if intent is Intent.REQUEST_HUMAN:
             return self.handoff(run.id, actor, "PATIENT_REQUESTED", trace_id)
+        if run.recall_status == RecallStatus.OUTREACHED.value and any(
+            word in text for word in ("不需要", "不用了", "不要了", "暂时不需要")
+        ):
+            run.recall_status = RecallStatus.DECLINED.value
+            run.workflow_step = WorkflowStep.TERMINAL
+            run.run_status = AgentRunStatus.COMPLETED
+            run.completed_at = self.clock.now()
+            run.action_required = "NONE"
+            run.current_reply = "好的，已为您跳过本次复查提醒。如需预约可随时告诉我。"
+            saved = self._save(run)
+            self._trace(saved, trace_id, "recall_declined", "UNDERSTANDING_REQUEST",
+                        status="DECLINED", details={"patient_id": run.patient_id})
+            return saved
         if intent is Intent.CANCEL_CURRENT_RUN:
             return self.cancel_run(run.id, actor, run.state_version, trace_id)
         if intent is Intent.QUERY_SLOT_AVAILABILITY:
@@ -196,58 +211,72 @@ class AgentWorkflow:
         return await self._search_slots(run, trace_id)
 
     async def _handle_follow_up(self, run: AgentRun, trace_id: str) -> AgentRun:
-        """Follow-up / recall slice: recommend a cleaning review from patient facts.
+        """Recall 闭环入口：基于确定性规则评估召回资格。
 
-        读取 Patient Ops 的患者事实（last_cleaning_date），若距上次洗牙超过 5 个月则
-        预填洗牙服务并引导到既有日期选择管线；若未到期或缺少事实，则给出确定性
-        降级回复，不擅自发起任何预约写操作。
+        召回资格由 RecallEligibilityRule 确定性代码判定，LLM 不参与。
+        资格判定后设置 recall_status 并引导患者进入既有预约管线。
         """
         facts = await self.patient_ops.facts(run.patient_id)
-        cleaning_fact = next((item for item in facts if item.get("fact_type") == "last_cleaning_date"), None)
-        if not cleaning_fact or not cleaning_fact.get("value"):
-            run.workflow_step = WorkflowStep.COLLECTING_REQUIREMENTS
-            run.run_status = AgentRunStatus.WAITING_PATIENT
-            run.action_required = "NONE"
-            run.current_reply = "暂时没有找到适合您的复查建议。您可以告诉我需要预约的服务和日期，我来帮您安排。"
-            saved = self._save(run)
-            self._trace(saved, trace_id, "follow_up_no_applicable_fact", "UNDERSTANDING_REQUEST",
-                        status="NO_APPLICABLE_FACT", details={"patient_id": run.patient_id})
-            return saved
-        try:
-            last_date = date.fromisoformat(str(cleaning_fact["value"]))
-        except (TypeError, ValueError):
-            run.current_reply = "暂时没有找到适合您的复查建议。您可以告诉我需要预约的服务和日期，我来帮您安排。"
-            saved = self._save(run)
-            self._trace(saved, trace_id, "follow_up_invalid_fact", "UNDERSTANDING_REQUEST",
-                        status="NO_APPLICABLE_FACT", details={"patient_id": run.patient_id})
-            return saved
+        consent = await self.patient_ops.consent(run.patient_id, "web_simulator")
+        existing_appointments = await self.clinic.patient_appointments(run.patient_id)
         today = self.clock.now().date()
-        months_ago = (today.year - last_date.year) * 12 + (today.month - last_date.month)
-        if today.day < last_date.day:
-            months_ago -= 1
-        if months_ago < 5:
+        result = self.recall_rule.evaluate(facts, consent, existing_appointments, today)
+
+        if result.eligibility is RecallEligibility.NOT_ELIGIBLE:
+            run.recall_status = RecallStatus.SKIPPED.value
+            run.next_best_action = None
             run.workflow_step = WorkflowStep.COLLECTING_REQUIREMENTS
             run.run_status = AgentRunStatus.WAITING_PATIENT
             run.action_required = "NONE"
-            run.current_reply = f"您上次洗牙是 {last_date.isoformat()}，距今约 {months_ago} 个月，暂未到常规复查周期。"
+            if result.reason_code == "NO_PATIENT_FACTS":
+                reply = "暂时没有找到适合您的复查建议。您可以告诉我需要预约的服务和日期，我来帮您安排。"
+            elif result.reason_code == "NOT_YET_DUE":
+                reply = (
+                    f"您上次洗牙是 {result.last_cleaning_date}，距今约 {result.months_since_last_cleaning} 个月，"
+                    "暂未到常规复查周期。"
+                )
+            elif result.reason_code == "CONTACT_CONSENT_DENIED":
+                reply = "您未授权通过当前渠道接收复查提醒，如需预约请直接告诉我。"
+            else:
+                reply = "暂时没有找到适合您的复查建议。您可以告诉我需要预约的服务和日期，我来帮您安排。"
+            run.current_reply = reply
             saved = self._save(run)
-            self._trace(saved, trace_id, "follow_up_not_yet_due", "UNDERSTANDING_REQUEST",
-                        status="NOT_YET_DUE", details={"last_cleaning_date": last_date.isoformat()})
+            self._trace(saved, trace_id, "recall_not_eligible", "UNDERSTANDING_REQUEST",
+                        status=result.reason_code, details={"patient_id": run.patient_id})
             return saved
-        run.service_item_id = "SV-CLEANING"
-        run.service_item_name = "洗牙"
+
+        if result.eligibility is RecallEligibility.SKIP:
+            run.recall_status = RecallStatus.SKIPPED.value
+            run.next_best_action = None
+            run.workflow_step = WorkflowStep.COLLECTING_REQUIREMENTS
+            run.run_status = AgentRunStatus.WAITING_PATIENT
+            run.action_required = "NONE"
+            run.current_reply = "您已有未来的洗牙预约，无需重复安排。"
+            saved = self._save(run)
+            self._trace(saved, trace_id, "recall_skipped_existing_appointment", "UNDERSTANDING_REQUEST",
+                        status=result.reason_code, details={"patient_id": run.patient_id})
+            return saved
+
+        run.recall_status = RecallStatus.OUTREACHED.value
+        run.next_best_action = result.next_best_action
+        run.service_item_id = result.recommended_service_item_id
+        run.service_item_name = result.recommended_service_item_name
         clinics = await self.clinic.clinics()
         if len(clinics) == 1:
             run.clinic_id = clinics[0]["id"]
-        self._trace(run, trace_id, "follow_up_recommendation_made", "UNDERSTANDING_REQUEST",
-                    status="RECOMMENDED", details={
-                        "service_item_id": "SV-CLEANING",
-                        "last_cleaning_date": last_date.isoformat(),
-                        "months_ago": months_ago,
+        self._trace(run, trace_id, "recall_eligible_outreach", "UNDERSTANDING_REQUEST",
+                    status="ELIGIBLE", details={
+                        "service_item_id": result.recommended_service_item_id,
+                        "last_cleaning_date": result.last_cleaning_date,
+                        "months_since_last_cleaning": result.months_since_last_cleaning,
+                        "next_best_action": result.next_best_action,
                     })
         return await self._present_available_dates(
             run, trace_id,
-            reply_override=f"您上次洗牙是 {last_date.isoformat()}，距今约 {months_ago} 个月，建议安排一次复查。请选择可约日期：",
+            reply_override=(
+                f"您上次洗牙是 {result.last_cleaning_date}，距今约 {result.months_since_last_cleaning} 个月，"
+                "建议安排一次复查。请选择可约日期，或回复“不需要”跳过。"
+            ),
         )
 
     async def _present_service_selection(self, run: AgentRun, trace_id: str, reply_override: Optional[str] = None) -> AgentRun:
@@ -635,9 +664,15 @@ class AgentWorkflow:
 
     async def _enqueue_side_effects(self, run: AgentRun, task_type: str, trace_id: str) -> AgentRun:
         now = self.clock.now()
+        if run.recall_status in (RecallStatus.OUTREACHED.value, RecallStatus.ACCEPTED.value):
+            run.recall_status = RecallStatus.CONVERTED.value
+            self._trace(run, trace_id, "recall_converted", "VERIFYING_CORE_RESULT",
+                        status="CONVERTED", details={"appointment_id": run.appointment_id})
         base = {"run_id": run.id, "operation_id": run.operation_id, "patient_id": run.patient_id,
                 "task_type": task_type, "task_status": "SUCCEEDED", "business_id": run.appointment_id,
                 "occurred_at": now.isoformat()}
+        if run.recall_status:
+            base["recall_status"] = run.recall_status
         events = [OutboxEvent(id=f"OUT-{uuid4().hex[:12]}", run_id=run.id,
             operation_id=run.operation_id, event_type="WRITEBACK", payload=base, next_attempt_at=now, created_at=now)]
         consent = await self.patient_ops.consent(run.patient_id, "web_simulator")

@@ -2,9 +2,10 @@
 
 import asyncio
 from datetime import timedelta
-from typing import Dict
+from typing import Dict, Optional
 
 from patient_ops_agent.clock import Clock
+from patient_ops_agent.demo import FailureInjector
 from patient_ops_agent.domain.models import OutboxStatus, SideEffectStatus
 from patient_ops_agent.domain.store import InMemoryStore
 from patient_ops_agent.gateways import GatewayError, PatientOpsGateway
@@ -12,11 +13,14 @@ from patient_ops_agent.models import AgentRunStatus
 
 
 class NotificationSender:
-    def __init__(self) -> None:
+    def __init__(self, failure_injector: Optional[FailureInjector] = None) -> None:
         self.messages = []
         self.fail_attempts = 0
+        self.failure_injector = failure_injector
 
     async def send(self, payload: Dict[str, object], event_id: str) -> None:
+        if self.failure_injector and self.failure_injector.consume("notification.send"):
+            raise GatewayError("UPSTREAM_UNAVAILABLE", "synthetic notification failure", True)
         if self.fail_attempts > 0:
             self.fail_attempts -= 1
             raise GatewayError("UPSTREAM_UNAVAILABLE", "synthetic notification failure", True)

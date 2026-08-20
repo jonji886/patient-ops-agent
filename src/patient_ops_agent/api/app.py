@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from patient_ops_agent.clock import Clock
+from patient_ops_agent.demo import DemoScenario, DemoScenarioController
 from patient_ops_agent.domain.models import ManualTaskStatus
 from patient_ops_agent.domain.store import InMemoryStore
 from patient_ops_agent.security import ActorContext, DemoAuthenticator, issue_actor_token, verify_actor_token
@@ -82,6 +83,11 @@ class OperatorReplyRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
+class DemoScenarioRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scenario: DemoScenario
+
+
 def create_agent_app(
     workflow: AgentWorkflow,
     store: InMemoryStore,
@@ -89,6 +95,7 @@ def create_agent_app(
     token_secret: str,
     lifespan: Optional[Any] = None,
     demo_authenticator: Optional[DemoAuthenticator] = None,
+    demo_controller: Optional[DemoScenarioController] = None,
 ) -> FastAPI:
     app = FastAPI(title="Patient Ops Agent API", version="0.1.0", lifespan=lifespan)
     app.state.workflow = workflow
@@ -125,6 +132,20 @@ def create_agent_app(
 
     @app.get("/health")
     async def health(): return {"status": "ok"}
+
+    def require_demo_controller() -> DemoScenarioController:
+        if demo_controller is None or not demo_controller.enabled:
+            raise WorkflowError("DEMO_SCENARIOS_DISABLED", "demo scenarios are disabled", 404)
+        return demo_controller
+
+    @app.get("/api/v1/demo/scenario")
+    async def demo_scenario(_: ActorContext = Depends(actor)):
+        return require_demo_controller().status()
+
+    @app.post("/api/v1/demo/scenario")
+    async def activate_demo_scenario(body: DemoScenarioRequest, _: ActorContext = Depends(actor),
+                                     x_request_id: str = Header(...)):
+        return require_demo_controller().activate(body.scenario)
 
     @app.get("/api/v1/auth/demo-accounts")
     async def demo_accounts() -> list[DemoAccountView]:

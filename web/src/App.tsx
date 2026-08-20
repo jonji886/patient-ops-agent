@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import {
   ApiError,
+  activateDemoScenario,
   cancelRun,
   confirm,
   createConversation,
   getRun,
+  getDemoScenarioStatus,
+  getTrace,
   listDemoAccounts,
   login,
   requestHandoff,
@@ -15,7 +18,7 @@ import {
   sendMessage,
 } from "./api";
 import { AdminWorkspace, OperatorWorkspace } from "./RoleWorkspaces";
-import type { ActorRole, Appointment, AvailableDate, DemoAccount, Run, ServiceOption, Slot, SuggestedReply } from "./types";
+import type { ActorRole, Appointment, AvailableDate, DemoAccount, DemoScenarioId, DemoScenarioStatus, Run, ServiceOption, Slot, SuggestedReply, TraceEvent } from "./types";
 
 type ChatItem = {
   id: string;
@@ -60,6 +63,14 @@ const labels: Record<string, string> = {
   CANCEL_APPOINTMENT: "取消预约",
   CANCEL_CURRENT_RUN: "取消当前流程",
   REQUEST_HUMAN: "请求人工客服",
+};
+
+const traceLabels: Record<string, string> = {
+  run_created: "Run 已创建", patient_context_loaded: "患者上下文已加载", understanding_produced: "Intent Parsed",
+  slots_returned: "号源已查询", confirmation_prepared: "患者确认已生成", policy_decision: "Policy 已校验",
+  tool_outcome_unknown: "API 响应超时 · UNKNOWN", business_result_found: "Reconciliation 找到业务结果",
+  business_result_verified: "业务结果已核验", outbox_persisted: "Outbox 已持久化", human_handoff: "执行权已转人工",
+  policy_denied: "Policy BLOCKED", tool_execution: "Tool 已执行", duplicate_request_suppressed: "重复预约已抑制",
 };
 
 function label(value: string | null | undefined): string {
@@ -437,6 +448,39 @@ function HandoffBanner({ run }: { run: Run }) {
   return <section className="handoff-banner" role="status"><div><p className="eyebrow">执行权已切换</p><strong>当前已由人工客服接管</strong><p>Agent 自动执行已暂停。{run.manual_task_id ? "人工任务已创建，人工客服会根据当前 Run 和已记录的执行上下文继续处理。" : "人工客服会根据当前 Run 和已记录的执行上下文继续处理。"}</p></div><StatusBadge value="OPERATOR" /></section>;
 }
 
+function DemoScenarioPanel({ status, busy, onActivate }: { status: DemoScenarioStatus; busy: boolean; onActivate: (scenario: DemoScenarioId) => void }) {
+  return (
+    <section className="demo-scenario-panel" aria-labelledby="demo-scenario-title">
+      <div className="card-heading">
+        <div><p className="eyebrow">INTERVIEW DEMO</p><h3 id="demo-scenario-title">Demo Scenarios</h3></div>
+        <StatusBadge value={status.active_scenario === "NONE" ? "NONE" : status.active_scenario} />
+      </div>
+      <p className="help-text">故障只影响下一次对应的 Mock Adapter 调用，消费后自动恢复 NONE；默认不会启用任何故障。</p>
+      <div className="demo-scenario-list" role="list">
+        {status.scenarios.map((scenario) => (
+          <button key={scenario.id} type="button" className={`demo-scenario${status.active_scenario === scenario.id ? " demo-scenario--active" : ""}`} onClick={() => onActivate(scenario.id)} disabled={busy || (status.active_scenario !== "NONE" && scenario.id !== "NONE")}>
+            <span><strong>{scenario.name}</strong><small>{scenario.description}</small><em>{scenario.observation}</em></span>
+            <i>{scenario.id === "NONE" ? "基线" : status.active_scenario === scenario.id ? "已启用" : "启用"}</i>
+          </button>
+        ))}
+      </div>
+      {status.active_scenario !== "NONE" && <p className="demo-scenario-hint">请按正常预约流程继续；场景将在下一次匹配的外部调用中消费。</p>}
+    </section>
+  );
+}
+
+function TraceTimeline({ events }: { events: TraceEvent[] }) {
+  if (!events.length) return null;
+  return (
+    <section className="trace-timeline" aria-labelledby="trace-timeline-title">
+      <div className="card-heading"><div><p className="eyebrow">EXECUTION TRACE</p><h3 id="trace-timeline-title">运行时间线</h3></div><span className="help-text">{events.length} 个事件</span></div>
+      <ol>
+        {events.map((event, index) => <li key={`${event.trace_id}-${index}`}><span className={`trace-timeline__dot trace-timeline__dot--${tone(event.status ?? "NEUTRAL")}`} /><div><strong>{traceLabels[event.event] ?? event.event}</strong><time>{formatDateTime(event.timestamp)}</time>{event.status && <small>{event.status}</small>}</div></li>)}
+      </ol>
+    </section>
+  );
+}
+
 export function App() {
   const [token, setToken] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -446,6 +490,8 @@ export function App() {
   const [accountLoadError, setAccountLoadError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  const [trace, setTrace] = useState<TraceEvent[]>([]);
+  const [demoScenario, setDemoScenario] = useState<DemoScenarioStatus | null>(null);
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [busy, setBusy] = useState(false);
@@ -470,6 +516,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!token || actorRole !== "PATIENT") {
+      setDemoScenario(null);
+      return;
+    }
+    void getDemoScenarioStatus(token).then(setDemoScenario).catch((reason: unknown) => {
+      // A 404 means the server is running with ENABLE_DEMO_SCENARIOS=false.
+      if (!(reason instanceof ApiError) || reason.code !== "DEMO_SCENARIOS_DISABLED") setDemoScenario(null);
+    });
+  }, [actorRole, token]);
+
+  useEffect(() => {
     if (!cancelDialogOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) setCancelDialogOpen(false);
@@ -481,15 +538,24 @@ export function App() {
   useEffect(() => {
     if (!shouldPoll || !run || !token) return;
     const id = window.setInterval(() => {
-      void getRun(token, run.run_id).then(updateRun).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "状态刷新失败。"));
+      void Promise.all([getRun(token, run.run_id), getTrace(token, run.run_id)]).then(([nextRun, nextTrace]) => { updateRun(nextRun); setTrace(nextTrace); }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "状态刷新失败。"));
     }, 1500);
     return () => window.clearInterval(id);
   }, [run?.run_id, run?.state_version, shouldPoll, token]);
 
   useEffect(() => {
+    if (!run || !token) {
+      setTrace([]);
+      return;
+    }
+    void getTrace(token, run.run_id).then(setTrace).catch(() => setTrace([]));
+    if (demoScenario) void getDemoScenarioStatus(token).then(setDemoScenario).catch(() => undefined);
+  }, [demoScenario !== null, run?.run_id, run?.state_version, token]);
+
+  useEffect(() => {
     const feed = conversationFeedRef.current;
     if (feed) feed.scrollTop = feed.scrollHeight;
-  }, [messages.length, run?.run_id, run?.state_version]);
+  }, [messages.length, run?.run_id, run?.state_version, trace.length]);
 
   const composerDisabled = busy || run?.action_required === "SLOT_SELECTION" || run?.action_required === "CONFIRMATION";
   const canShowSuggestedReplies = !handoff && !composerDisabled && run?.action_required !== "APPOINTMENT_SELECTION";
@@ -557,7 +623,7 @@ export function App() {
   }
 
   function clearBrowserSession() {
-    setToken(null); setDisplayName(""); setActorRole(null); setConversationId(null); setRun(null); setMessage("");
+    setToken(null); setDisplayName(""); setActorRole(null); setConversationId(null); setRun(null); setTrace([]); setDemoScenario(null); setMessage("");
     setMessages([]); setError(null); setBusy(false); setCancelDialogOpen(false); setAccountSwitchOpen(false); setNavCollapsed(false);
     lastRenderedReplyKeyRef.current = null;
   }
@@ -565,7 +631,7 @@ export function App() {
   async function authenticate(username: string, password: string) {
     const account = await login(username, password);
     const conversation = account.actor_role === "PATIENT" ? await createConversation(account.access_token) : undefined;
-    setRun(null); setMessage(""); setMessages(account.actor_role === "PATIENT" ? [{ id: crypto.randomUUID(), author: "agent", text: "你好，我可以协助你创建、查询或取消本人的预约。" }] : []);
+    setRun(null); setTrace([]); setDemoScenario(null); setMessage(""); setMessages(account.actor_role === "PATIENT" ? [{ id: crypto.randomUUID(), author: "agent", text: "你好，我可以协助你创建、查询或取消本人的预约。" }] : []);
     lastRenderedReplyKeyRef.current = null;
     setError(null); setBusy(false); setCancelDialogOpen(false); setNavCollapsed(false);
     setToken(account.access_token); setDisplayName(account.display_name); setActorRole(account.actor_role); setConversationId(conversation?.conversation_id ?? null);
@@ -574,6 +640,23 @@ export function App() {
   function closeAccountSwitch() {
     setAccountSwitchOpen(false);
     window.requestAnimationFrame(() => accountMenuTriggerRef.current?.focus());
+  }
+
+  async function triggerDemoScenario(scenario: DemoScenarioId) {
+    if (!token || !demoScenario) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await activateDemoScenario(token, scenario);
+      setDemoScenario(next);
+      if (next.trigger_message) setMessage(next.trigger_message);
+      else if (scenario !== "NONE") setMessage("我想预约明天下午洗牙");
+      else setMessage("我想预约明天下午洗牙");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Demo Scenario 启用失败，请重试。");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const accountActions = actorRole ? <AccountMenu displayName={displayName} actorRole={actorRole} onSwitch={() => setAccountSwitchOpen(true)} onLogout={clearBrowserSession} triggerRef={accountMenuTriggerRef} /> : null;
@@ -600,6 +683,7 @@ export function App() {
           {error && <Notice kind="error">{error}</Notice>}
           <div ref={conversationFeedRef} className="conversation-feed" aria-live="polite">
             <div className="conversation-content">
+              {demoScenario && <DemoScenarioPanel status={demoScenario} busy={busy} onActivate={(scenario) => { void triggerDemoScenario(scenario); }} />}
               {messages.map((item) => <article key={item.id} className={`message message--${item.author}`}><span className="message__author">{item.author === "patient" ? "患者" : item.author === "operator" ? "人工客服" : "Agent"}</span><p>{item.text}</p></article>)}
               {!run && !busy && <ConversationEmptyState onChoosePrompt={chooseInitialPrompt} />}
               {run && <BookingProgress run={run} />}
@@ -608,6 +692,7 @@ export function App() {
               {run?.action_required === "SLOT_SELECTION" && <SlotOptions run={run} busy={busy} onSelect={(slot) => execute(() => selectSlot(token, run, slot.id, slot.version))} />}
               {run?.action_required === "APPOINTMENT_SELECTION" && <AppointmentOptions run={run} busy={busy} onSelect={(appointment) => execute(() => selectAppointment(token, run, appointment.id, appointment.version))} />}
               {run?.action_required === "CONFIRMATION" && <ConfirmationCard run={run} busy={busy} onConfirm={() => execute(() => confirm(token, run))} />}
+              <TraceTimeline events={trace} />
               {run && <AppointmentDetailsCard run={run} />}
               {run && <BusinessResult run={run} />}
               <RunStateNotice run={run} busy={busy} />

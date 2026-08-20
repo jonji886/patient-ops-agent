@@ -4,6 +4,8 @@ import type {
   AdminRunSummary,
   ApiErrorPayload,
   ConversationResponse,
+  DemoScenarioId,
+  DemoScenarioStatus,
   DemoAccount,
   LoginResponse,
   ManualTask,
@@ -143,6 +145,17 @@ export function getRun(token: string, runId: string): Promise<Run> {
 
 export function getTrace(token: string, runId: string): Promise<TraceEvent[]> {
   return request<TraceEvent[]>(`/api/v1/runs/${runId}/trace`, {}, token);
+}
+
+export function getDemoScenarioStatus(token: string): Promise<DemoScenarioStatus> {
+  return request<DemoScenarioStatus>("/api/v1/demo/scenario", {}, token);
+}
+
+export function activateDemoScenario(token: string, scenario: DemoScenarioId): Promise<DemoScenarioStatus> {
+  return request<DemoScenarioStatus>("/api/v1/demo/scenario", {
+    method: "POST",
+    body: JSON.stringify({ scenario }),
+  }, token);
 }
 
 export function listManualTasks(token: string, status?: ManualTask["status"]): Promise<ManualTask[]> {

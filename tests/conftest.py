@@ -7,6 +7,7 @@ import pytest_asyncio
 
 from patient_ops_agent.api import create_agent_app
 from patient_ops_agent.clock import FixedClock
+from patient_ops_agent.demo import DemoScenarioController, FailureInjector
 from patient_ops_agent.domain import InMemoryStore
 from patient_ops_agent.gateways import ClinicCoreGateway, PatientOpsGateway
 from patient_ops_agent.llm import RuleBasedUnderstandingProvider
@@ -52,6 +53,7 @@ class SystemUnderTest:
     workflow: AgentWorkflow
     worker: OutboxWorker
     notifier: NotificationSender
+    demo_controller: DemoScenarioController
     clock: FixedClock
     token: str
 
@@ -111,6 +113,8 @@ async def sut():
     store = InMemoryStore()
     clinic_data = ClinicCoreData()
     patient_data = PatientOpsData()
+    failure_injector = FailureInjector()
+    clinic_data.failure_injector = failure_injector
     clinic_client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=create_clinic_core_app(clinic_data)),
         base_url="http://clinic-core",
@@ -127,7 +131,7 @@ async def sut():
         PolicyEngine(),
         clock,
     )
-    notifier = NotificationSender()
+    notifier = NotificationSender(failure_injector)
     worker = OutboxWorker(store, PatientOpsGateway(patient_client), notifier, clock)
     actor = ActorContext(
         actor_id="ACTOR-P1001",
@@ -136,11 +140,12 @@ async def sut():
         verified_at=clock.now(),
     )
     token = issue_actor_token(actor, "test-secret")
-    app = create_agent_app(workflow, store, clock, "test-secret")
+    demo_controller = DemoScenarioController(failure_injector, enabled=True, max_retry_attempts=3)
+    app = create_agent_app(workflow, store, clock, "test-secret", demo_controller=demo_controller)
     client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://agent")
     system = SystemUnderTest(
         client, clinic_client, patient_client, clinic_data, patient_data, store,
-        workflow, worker, notifier, clock, token,
+        workflow, worker, notifier, demo_controller, clock, token,
     )
     yield system
     await client.aclose()

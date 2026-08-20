@@ -404,18 +404,19 @@ Trace 中可见同一 Operation 的对账链路。若找到结果，卡片平滑
 
 ### 13.1 当前实现审计
 
-当前实现采用独立的 `web/` React / Vite 工程。开发时 Vite 将 `/api` 代理到本地 FastAPI；Docker 环境由独立 Nginx 容器托管构建产物并代理到 `agent-api`。因此浏览器以同源路径访问 API，不需要为此演示页放宽 Agent API 的 CORS 策略。
+当前实现采用独立的 `web/` React / Vite 工程。开发时 Vite 将 `/api` 代理到本地 FastAPI；Docker 环境由独立 Nginx 容器托管构建产物并代理到 `agent-api`。因此浏览器以同源路径访问 API，不需要为此演示页放宽 Agent API 的 CORS 策略。患者页面可以查看自己 Run 的脱敏执行时间线，但不展示管理端全局 Runtime 或其他患者信息。
 
 FastAPI 不再持有内嵌 HTML 或 UI 状态，仅提供 API、鉴权和业务运行时。前端保持 Token 仅在内存中，不展示或持久化 Token、密码或完整 Patient ID。登录响应由服务端返回 `actor_role`，前端据此选择 Patient、Operator 或 Admin 工作台；每个 API 仍由服务端再次验证角色与资源范围。前端不新增业务决策或 Policy。
 
 ### 13.2 前端实现验收
 
-- [x] Patient、Operator、Admin 分别提供匹配其任务的页面结构；患者端不出现 Runtime / Trace，Admin 默认进入基于服务端真实聚合数据的运营总览，Operator 与 Admin 仅展示经授权的诊断信息。
+- [x] Patient、Operator、Admin 分别提供匹配其任务的页面结构；患者端仅显示自己的执行 Trace，Admin 默认进入基于服务端真实聚合数据的运营总览，Operator 与 Admin 仅展示经授权的诊断信息。
 - [x] Slot、Appointment、Confirmation、Business Result、Side Effect、Handoff 有独立的结构化组件。
 - [x] 任意高风险写操作只可由服务器下发的 `confirmation_id` 与当前 `state_version` 提交。
 - [x] `WAITING_HUMAN / OPERATOR` 清楚显示执行权已转移，并阻断 Agent 自动写操作。
 - [x] `RECONCILING` 不宣称业务成功或失败；显示对账过程且不重复创建业务 Operation。
 - [x] `COMPLETED_WITH_PENDING_SIDE_EFFECTS` 分开表达核心预约成功和外围副作用重试。
+- [x] 在显式启用 Demo Controller 时，患者端提供 one-shot Demo Scenario 开关，并将故障路径和真实 Run Trace 一起展示；默认 profile 不暴露故障开关。
 - [ ] Loading、Empty、Waiting Patient、Retrying、Reconciling、Waiting Human、Partial Success、Failed、Forbidden、State Conflict 都有指定 UI 行为。
 - [ ] Runtime 与 Trace 中的 Patient ID、Run ID、Operation ID 均为次级、按需披露的信息；Patient ID 脱敏。
 - [ ] 界面满足本文件第 12 节的基本可访问性要求。

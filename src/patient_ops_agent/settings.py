@@ -42,6 +42,27 @@ class Settings(BaseSettings):
     outbox_lease_seconds: int = 60
     actor_token_signing_secret: SecretStr = SecretStr("change-me-in-development-only")
 
+    # Demo controls are opt-in.  Production profiles never expose the
+    # scenario controller, even if an environment accidentally enables it.
+    enable_demo_scenarios: bool = False
+
+    # --- Integration reliability ---
+    # Gateway-level timeout (seconds) for external system HTTP calls.
+    gateway_timeout_seconds: float = 10.0
+    # Circuit breaker thresholds per external system.
+    circuit_failure_threshold: int = 5
+    circuit_recovery_timeout_seconds: float = 30.0
+
+    # --- Fault injection (deterministic, off by default) ---
+    # These allow demonstrating failure scenarios without random CI flakiness.
+    # Set MOCK_*_LATENCY_MS > 0 to simulate slow responses.
+    # Set MOCK_*_FAILURE_RATE to 1.0 for deterministic failure (use with
+    # the explicit fault hooks in ClinicCoreData for precise test control).
+    mock_clinic_core_latency_ms: int = 0
+    mock_clinic_core_failure_rate: float = 0.0
+    mock_patient_ops_latency_ms: int = 0
+    mock_patient_ops_failure_rate: float = 0.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

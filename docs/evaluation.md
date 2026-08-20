@@ -17,10 +17,10 @@ Real LLM Evaluation = 测量真实模型能力和不稳定性（需要 API Key�
 
 | 项目 | 值 |
 |---|---|
-| 数据集版本 | `synthetic-v0.1` |
+| 数据集版本 | `llm-golden-v0.1`（真实 LLM） / `synthetic-v0.1`（CI） |
 | Prompt / Provider 版本 | `understanding-v1` / deterministic rule-based CI provider |
 | 业务时钟 | `2026-08-14T09:00:00+08:00` |
-| 测试总数 | 122 |
+| 测试总数 | 126 |
 | 覆盖范围 | Unit / State / Policy / Recall Eligibility、NLU Golden、跨服务 Integration、E2E / Failure Scenarios、API Contract |
 
 ### 执行命令
@@ -29,7 +29,7 @@ Real LLM Evaluation = 测量真实模型能力和不稳定性（需要 API Key�
 python3 -m pytest -q
 ```
 
-结果：122 条全部通过。SPEC AC-01 至 AC-09 均有独立自动化场景；另有 13 条 Recall 单元+场景测试和 10 条真实 API 浏览器 E2E。
+结果：126 条全部通过。SPEC AC-01 至 AC-09 均有独立自动化场景；另有 13 条 Recall 单元+场景测试和 13 条真实 API 浏览器 E2E。
 
 ### 结果
 
@@ -82,7 +82,8 @@ export LLM_PROVIDER=deepseek
 export DEEPSEEK_API_KEY=your-key
 export DEEPSEEK_MODEL=deepseek-chat
 
-python3 -m patient_ops_agent.eval_runner
+patient-ops-eval-real
+# 等价于：python3 -m patient_ops_agent.eval_runner
 ```
 
 ### 数据集
@@ -124,6 +125,23 @@ python3 -m patient_ops_agent.eval_runner
 
 - JSON 报告（机器可读）：`reports/eval_<timestamp>.json`
 - Markdown 报告（人类可读）：`reports/eval_<timestamp>.md`
+- 最新 Snapshot：`reports/real-llm-eval-latest.md` / `.json`
+
+### 最近一次真实 Snapshot
+
+最近一次实际运行使用 `.env` 中的 DeepSeek Credential，模型为 `deepseek-chat`，数据集版本为 `llm-golden-v0.1`，生成时间为 `2026-08-20 15:35:42 (+08:00)`：
+
+| 指标 | 结果 |
+|---|---:|
+| Intent Accuracy | 63.3%（19/30） |
+| Entity Service Accuracy | 80.0% |
+| Entity Date Accuracy | 80.0% |
+| Entity Period Accuracy | 86.7% |
+| Structured Output Valid Rate | 86.7% |
+| Fallback Rate（UNKNOWN） | 0.0% |
+| Latency P50 / P95 | 1507.5 ms / 2231.8 ms |
+
+完整报告见 [`reports/real-llm-eval-latest.md`](../reports/real-llm-eval-latest.md)；该结果是一次真实模型观测，不代表稳定上限。Bad Cases 主要集中在歧义、召回、无效输入、边界输入和部分 Prompt Injection 结构化输出。
 
 ### 口径与限制
 
@@ -133,3 +151,4 @@ python3 -m patient_ops_agent.eval_runner
 - 结构化输出有效率衡量 JSON Output + Pydantic 校验后的有效比例。
 - 这些结果不外推到真实医疗生产环境。
 - 评测数据集可版本管理，Prompt 或模型变化时应重新运行。
+- 最新 Snapshot 必须由真实模型运行生成；deterministic Provider 的结果不能冒充真实模型评测。

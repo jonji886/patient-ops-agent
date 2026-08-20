@@ -12,6 +12,45 @@ tags:
   - name: admin
   - name: runtime
 paths:
+  /api/v1/demo/scenario:
+    get:
+      tags: [patient]
+      summary: Read the local interview-demo scenario controller
+      description: >-
+        Available only when ENABLE_DEMO_SCENARIOS is explicitly enabled. The endpoint is
+        fixture-only and is disabled for production profiles.
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Current one-shot scenario state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DemoScenarioStatus'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+    post:
+      tags: [patient]
+      summary: Arm or reset one local interview-demo scenario
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: './common.yaml#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DemoScenarioRequest'
+      responses:
+        '200':
+          description: Scenario armed; adapter failures are consumed once at the next matching boundary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DemoScenarioStatus'
+        '404':
+          $ref: './common.yaml#/components/responses/NotFound'
+
   /api/v1/auth/demo-accounts:
     get:
       tags: [auth]
@@ -569,6 +608,35 @@ components:
       scheme: bearer
       bearerFormat: SyntheticActorToken
   schemas:
+    DemoScenarioRequest:
+      type: object
+      required: [scenario]
+      additionalProperties: false
+      properties:
+        scenario:
+          type: string
+          enum: [NONE, COMMIT_TIMEOUT, TOOL_FAILURE_HANDOFF, NOTIFICATION_FAILURE, SLOT_CONFLICT, POLICY_BLOCK]
+    DemoScenarioStatus:
+      type: object
+      required: [enabled, active_scenario, remaining_injections, scenarios]
+      properties:
+        enabled: {type: boolean}
+        active_scenario:
+          type: string
+          enum: [NONE, COMMIT_TIMEOUT, TOOL_FAILURE_HANDOFF, NOTIFICATION_FAILURE, SLOT_CONFLICT, POLICY_BLOCK]
+        remaining_injections: {type: integer, minimum: 0}
+        scenarios:
+          type: array
+          items:
+            type: object
+            required: [id, name, description, observation]
+            properties:
+              id: {type: string}
+              name: {type: string}
+              description: {type: string}
+              observation: {type: string}
+        trigger_message: {type: string, nullable: true}
+        consumed: {type: string, nullable: true}
     DemoAccountView:
       type: object
       required: [username, display_name, actor_role]

@@ -11,13 +11,16 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, Query
 from fastapi.responses import JSONResponse
 
+from patient_ops_agent.demo import FailureInjector
+
 from .errors import api_error
 from .fixtures import load_fixtures
 from .persistence import DocumentStore
 
 
 class ClinicCoreData:
-    def __init__(self, fixtures: Optional[Dict[str, Any]] = None, database_url: Optional[str] = None) -> None:
+    def __init__(self, fixtures: Optional[Dict[str, Any]] = None, database_url: Optional[str] = None,
+                 failure_injector: Optional[FailureInjector] = None) -> None:
         self.persistence = DocumentStore(database_url, "clinic_core") if database_url else None
         saved = self.persistence.load() if self.persistence else None
         catalog = fixtures or load_fixtures()
@@ -32,6 +35,7 @@ class ClinicCoreData:
         self.appointments = {item["id"]: deepcopy(item) for item in appointments}
         self.operations: Dict[str, Dict[str, Any]] = deepcopy(data.get("operations", {}))
         self.idempotency: Dict[str, Dict[str, Any]] = deepcopy(data.get("idempotency", {}))
+        self.failure_injector = failure_injector
         self.timeout_after_commit_once = False
         self.unavailable_attempts = 0
         if self.persistence and (not saved or data != saved): self.persist()
@@ -149,12 +153,19 @@ def create_clinic_core_app(data: Optional[ClinicCoreData] = None) -> FastAPI:
                 result = deepcopy(prior["response"])
                 result["idempotent_replay"] = True
                 return JSONResponse(status_code=200, content=result, headers={"Idempotent-Replay": "true"})
+            if state.failure_injector and state.failure_injector.consume("clinic.create_failure"):
+                return api_error(503, "UPSTREAM_UNAVAILABLE", "synthetic scenario outage", True)
             if state.unavailable_attempts > 0:
                 state.unavailable_attempts -= 1
                 return api_error(503, "UPSTREAM_UNAVAILABLE", "synthetic outage", True)
             slot = state.slots.get(body.get("slot_id"))
             if not slot:
                 return api_error(404, "SLOT_NOT_FOUND", "slot not found")
+            if state.failure_injector and state.failure_injector.consume("clinic.slot_conflict"):
+                slot["status"] = "BOOKED"
+                slot["version"] += 1
+                state.persist()
+                return api_error(409, "SLOT_OCCUPIED", "slot was occupied by a concurrent request")
             if slot["status"] != "AVAILABLE":
                 return api_error(409, "SLOT_OCCUPIED", "slot is occupied")
             if slot["version"] != body.get("expected_slot_version"):
@@ -192,7 +203,8 @@ def create_clinic_core_app(data: Optional[ClinicCoreData] = None) -> FastAPI:
                 "business_id": appointment_id, "response_snapshot": response,
             }
             state.persist()
-            if state.timeout_after_commit_once:
+            injected_timeout = state.failure_injector and state.failure_injector.consume("clinic.commit_timeout")
+            if state.timeout_after_commit_once or injected_timeout:
                 state.timeout_after_commit_once = False
                 return api_error(504, "TIMEOUT", "response lost after commit", True, "UNKNOWN")
             return JSONResponse(status_code=201, content=response)

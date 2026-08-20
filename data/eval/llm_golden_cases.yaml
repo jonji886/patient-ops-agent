@@ -13,6 +13,7 @@
 #   expected_period: 期望时段（MORNING/AFTERNOON/EVENING，可为 null）
 #   category: 测试类别
 
+dataset_version: "llm-golden-v0.1"
 business_clock: "2026-08-14T09:00:00+08:00"
 
 cases:

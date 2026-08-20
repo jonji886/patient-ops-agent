@@ -31,6 +31,7 @@ postgres = [
 patient-ops-agent = "patient_ops_agent.main:run"
 patient-ops-worker = "patient_ops_agent.worker:run"
 patient-ops-token = "patient_ops_agent.token_cli:run"
+patient-ops-eval-real = "patient_ops_agent.eval_runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

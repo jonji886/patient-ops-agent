@@ -111,7 +111,7 @@ def _date_correct(expected: Optional[str], actual: Optional[str]) -> bool:
     return str(actual) == expected
 
 
-async def evaluate_case(provider: DeepSeekUnderstandingProvider, case: Dict[str, Any]) -> CaseResult:
+async def evaluate_case(provider: DeepSeekUnderstandingProvider, case: Dict[str, Any], business_clock: str = "") -> CaseResult:
     message = case["message"]
     expected_intent = case["expected_intent"]
     expected_service = case.get("expected_service")
@@ -120,7 +120,10 @@ async def evaluate_case(provider: DeepSeekUnderstandingProvider, case: Dict[str,
 
     start = time.monotonic()
     try:
-        result = await provider.understand(UnderstandingRequest(message=message))
+        result = await provider.understand(UnderstandingRequest(
+            message=message,
+            current_fields={"business_clock": business_clock} if business_clock else {},
+        ))
         latency_ms = (time.monotonic() - start) * 1000
 
         actual_intent = result.intent.value
@@ -226,6 +229,7 @@ def generate_markdown(report: EvalReport) -> str:
         f"| Provider | {report.metadata.get('provider', '')} |",
         f"| Model | {report.metadata.get('model', '')} |",
         f"| 数据集 | {report.metadata.get('dataset', '')} |",
+        f"| 数据集版本 | {report.metadata.get('dataset_version', '')} |",
         f"| 业务时钟 | {report.metadata.get('business_clock', '')} |",
         f"| 用例总数 | {m.get('total', 0)} |",
         "",
@@ -256,17 +260,28 @@ def generate_markdown(report: EvalReport) -> str:
         "## 失败用例",
         "",
     ])
-    failures = [r for r in report.case_results if not r.intent_correct or not r.structured_output_valid]
+    failures = [
+        r for r in report.case_results
+        if not r.intent_correct or not r.service_correct or not r.date_correct
+        or not r.period_correct or not r.structured_output_valid
+    ]
     if not failures:
         lines.append("无失败用例。")
     else:
         lines.extend([
-            "| Case ID | 类别 | 输入 | 期望意图 | 实际意图 | 错误 |",
+            "| Case ID | 类别 | 输入 | 期望 / 实际 | 失败字段 | 错误 |",
             "|---|---|---|---|---|---|",
         ])
         for r in failures:
-            error = r.error or f"intent mismatch (service={r.service_correct}, date={r.date_correct})"
-            lines.append(f"| {r.case_id} | {r.category} | {r.message[:30]}... | {r.expected_intent} | {r.actual_intent} | {error[:50]} |")
+            failed_fields = ", ".join(
+                name for name, valid in (
+                    ("intent", r.intent_correct), ("service", r.service_correct),
+                    ("date", r.date_correct), ("period", r.period_correct),
+                    ("schema", r.structured_output_valid),
+                ) if not valid
+            )
+            error = r.error or "字段与 Golden Case 不一致"
+            lines.append(f"| {r.case_id} | {r.category} | {r.message[:30]}... | {r.expected_intent} / {r.actual_intent} | {failed_fields} | {error[:50]} |")
 
     lines.extend([
         "",
@@ -286,7 +301,7 @@ async def run_evaluation(provider: DeepSeekUnderstandingProvider, dataset: Dict[
     results: List[CaseResult] = []
     for case in cases:
         print(f"  Evaluating {case['case_id']}: {case['message'][:30]}...", file=sys.stderr)
-        result = await evaluate_case(provider, case)
+        result = await evaluate_case(provider, case, dataset.get("business_clock", ""))
         results.append(result)
 
     metrics = compute_metrics(results)
@@ -296,6 +311,7 @@ async def run_evaluation(provider: DeepSeekUnderstandingProvider, dataset: Dict[
             "provider": "deepseek",
             "model": os.environ.get("DEEPSEEK_MODEL", "unknown"),
             "dataset": "llm_golden_cases.yaml",
+            "dataset_version": dataset.get("dataset_version", "unspecified"),
             "business_clock": dataset.get("business_clock", ""),
         },
         metrics=metrics,
@@ -337,8 +353,11 @@ def main():
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    json_path = output_dir / f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    md_path = output_dir / f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    snapshot = datetime.now().strftime('%Y%m%d_%H%M%S')
+    json_path = output_dir / f"eval_{snapshot}.json"
+    md_path = output_dir / f"eval_{snapshot}.md"
+    latest_json_path = output_dir / "real-llm-eval-latest.json"
+    latest_md_path = output_dir / "real-llm-eval-latest.md"
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(
@@ -347,12 +366,16 @@ def main():
             f, ensure_ascii=False, indent=2,
         )
 
+    markdown = generate_markdown(report)
     with open(md_path, "w", encoding="utf-8") as f:
-        f.write(generate_markdown(report))
+        f.write(markdown)
+    latest_json_path.write_text(json_path.read_text(encoding="utf-8"), encoding="utf-8")
+    latest_md_path.write_text(markdown, encoding="utf-8")
 
     print(f"\n{report.summary}", file=sys.stderr)
     print(f"JSON report: {json_path}", file=sys.stderr)
     print(f"Markdown report: {md_path}", file=sys.stderr)
+    print(f"Latest snapshot: {latest_md_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

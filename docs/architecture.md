@@ -1390,3 +1390,21 @@ Contract Skeleton 已落盘；后续实现阶段还需要：
 - [ ] 必要时产生的 ADR。
 
 这些产物必须遵循本文依赖方向和 SPEC 验收标准；如果实现暴露架构矛盾，应先更新 Architecture / ADR，再修改代码。
+
+## 24. Demo Scenario 与故障注入边界
+
+面试演示需要能够主动触发异常，但 Demo 控制不能进入 Agent 决策层。当前采用以下边界：
+
+```text
+DemoScenarioController
+        ↓ arm / reset
+FailureInjector（one-shot、进程内、默认 NONE）
+        ↓ consume at infrastructure boundary
+Clinic Core Mock / Notification Sender
+        ↓
+既有 Gateway → Workflow → State Machine / Policy / Outbox
+```
+
+支持 `COMMIT_TIMEOUT`、`TOOL_FAILURE_HANDOFF`、`NOTIFICATION_FAILURE`、`SLOT_CONFLICT` 和 `POLICY_BLOCK`。前四类只改变 Mock Adapter 的外部行为；`POLICY_BLOCK` 直接复用现有越权消息和 Policy 路径。每个 Scenario 消费后自动恢复 `NONE`，不会跨测试或后续请求持续注入故障。
+
+`/api/v1/demo/scenario` 只在 `ENABLE_DEMO_SCENARIOS=true` 且非 production profile 时注册为可用能力，并要求 Patient Actor Token；它不是生产控制面，也不接受患者 ID、权限或最终业务结果作为输入。正常运行默认关闭，真实 LLM Evaluation 与 Deterministic CI 仍保持独立。

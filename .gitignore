@@ -30,7 +30,10 @@ var/
 htmlcov/
 
 # Real LLM Evaluation reports (generated, not version-controlled)
-reports/
+reports/*
+!reports/README.md
+!reports/real-llm-eval-latest.md
+!reports/real-llm-eval-latest.json
 
 # Local runtime data
 runtime/

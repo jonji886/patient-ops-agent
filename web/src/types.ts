@@ -104,6 +104,30 @@ export interface TraceEvent {
   details: Record<string, unknown>;
 }
 
+export type DemoScenarioId =
+  | "NONE"
+  | "COMMIT_TIMEOUT"
+  | "TOOL_FAILURE_HANDOFF"
+  | "NOTIFICATION_FAILURE"
+  | "SLOT_CONFLICT"
+  | "POLICY_BLOCK";
+
+export interface DemoScenarioDefinition {
+  id: DemoScenarioId;
+  name: string;
+  description: string;
+  observation: string;
+}
+
+export interface DemoScenarioStatus {
+  enabled: boolean;
+  active_scenario: DemoScenarioId;
+  remaining_injections: number;
+  scenarios: DemoScenarioDefinition[];
+  trigger_message?: string;
+  consumed?: DemoScenarioId;
+}
+
 export interface LoginResponse {
   access_token: string;
   token_type: "bearer";

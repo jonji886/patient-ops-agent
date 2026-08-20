@@ -1,8 +1,8 @@
 # Patient Ops Agent
 
-> 一个通过业务事实、显式状态机、受控工具、结果对账和人工接管，安全完成口腔预约闭环的有状态 Agent。
+> 一个面向患者运营场景的 production-oriented 业务 Agent Demo：展示 LLM 如何在确定性状态机、Tool Contract、Policy、人工确认、异常恢复与交付方法约束下完成真实业务任务。
 
-**用业务语言说**：这个项目演示了一个能"办事"而不只是"聊天"的医疗 AI 客服——患者用自然语言就能创建、查询、取消预约；系统保证不重复预约、不越权操作、出事有人工兜底。它证明：**AI 可以安全地替患者完成真实写操作。**
+**用面试语言说**：这不是只展示 Happy Path 的 Chatbot，而是一个可运行的 AI FDE / AI 应用交付工程样例——LLM 负责理解，确定性代码负责状态、权限、写操作、对账和接管；项目还沉淀了 Real LLM Evaluation 与从 Mock 到客户系统的 Delivery Playbook。
 
 > **重要边界**：本项目是工程演示，只使用虚构数据，不连接真实医疗系统，不提供医疗诊断或治疗建议，不是任何医疗机构的官方项目，不能直接作为医疗产品使用。
 
@@ -14,11 +14,13 @@
 - [界面预览](#界面预览)
 - [Quick Start](#quick-start)
 - [演示脚本](#演示脚本)
+- [可演示故障场景](#可演示故障场景)
 - [业务规则一览](#业务规则一览)
 - [核心能力](#核心能力)
 - [关键架构设计与决策](#关键架构设计与决策)
 - [系统上下文](#系统上下文)
 - [测试](#测试)
+- [从 Demo 到客户现场](#从-demo-到客户现场)
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [工程边界](#工程边界)
@@ -174,6 +176,7 @@ npm run dev
 |---|---|---|
 | `LLM_PROVIDER` | `fake` | 接入真实模型时改为 `deepseek` |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` | 空 | `LLM_PROVIDER=deepseek` 时必填 |
+| `ENABLE_DEMO_SCENARIOS` | `false`（`.env.example` 为本地演示开启） | 暴露可视化 one-shot 故障场景；生产环境必须关闭 |
 | `AGENT_DATABASE_URL` 等三个数据库 URL | `./var/patient_ops/` 下的 SQLite 文件 | 切到 PostgreSQL 时由 Docker Compose 自动覆盖 |
 | `POSTGRES_PASSWORD` 等四个密码 | 占位值 | 仅运行 `docker compose` 前必须设置 |
 | `DEMO_BUSINESS_CLOCK` | `2026-08-14T09:00:00+08:00` | 本地演示固定业务时钟；DeepSeek / PostgreSQL Profile 使用系统时钟 |
@@ -221,19 +224,37 @@ curl -sS -X POST http://localhost:8000/api/v1/conversations \
 
 ## 演示脚本
 
-场景 1 / 4 / 6 / 7 可直接在页面操作复现；场景 2 / 3 / 5 依赖故障注入（`timeout_after_commit_once`、连续上游失败、通知失败），**演示 UI 不提供故障开关**，请通过自动化测试复现，链接见表末。
+登录患者工作台后，页面中的 `Demo Scenarios` 区域提供显式开关。故障默认关闭；每个场景只消费下一次匹配的 Mock Adapter 调用，完成后自动回到 `NONE`。场景开关只在 `ENABLE_DEMO_SCENARIOS=true` 且非 production profile 时暴露。
 
 | # | 场景 | 操作 | 预期结果 |
 |---|---|---|---|
-| 1 | 正常预约 | 输入"我想预约明天下午洗牙" → 选择号源 → 确认 | 一个 CONFIRMED Appointment，Outbox 完成 |
-| 2 | 超时对账（测试复现） | 测试内启用 `timeout_after_commit_once` 故障 → 确认 | Trace 显示 `tool_outcome_unknown` → `business_result_found`，Appointment 只有一个 |
-| 3 | 人工接管（测试复现） | 测试内启用连续上游失败 → 三次尝试耗尽 | Manual Task 为 `OPEN`，`execution_owner=OPERATOR` |
+| 1 | 正常预约 | 点击“正常预约” → 输入框发送“我想预约明天下午洗牙” → 选择号源 → 确认 | 一个 CONFIRMED Appointment，Outbox 完成 |
+| 2 | 预约成功但响应超时 | 点击“预约成功但响应超时” → 按正常预约流程确认 | Trace 显示 `UNKNOWN` → `Reconciliation` → `SUCCESS`，Appointment 只有一个 |
+| 3 | 连续失败 → 人工接管 | 点击“连续执行失败 → 人工接管” → 按正常预约流程确认 | 三次 Tool Failure 后 `execution_owner: AGENT → OPERATOR`，创建 Manual Task |
 | 4 | 修改确认参数 | 确认卡生成后输入"改为后天上午" | 旧 Confirmation 为 `INVALIDATED`，需重新确认 |
-| 5 | 通知失败（测试复现） | 核心预约成功，通知失败 | Appointment 保持 `CONFIRMED`，Run 为 `COMPLETED_WITH_PENDING_SIDE_EFFECTS` |
+| 5 | 业务成功但通知失败 | 点击“业务成功但通知失败” → 完成预约并等待 Outbox | `Business Status: SUCCESS`，`Notification: RETRY_SCHEDULED / FAILED` |
 | 6 | 替代号源 | 输入无号源的日期 → 问"有哪些日期可约" | 返回未来 7 天候选 → 选择并确认 |
 | 7 | 患者召回 | 输入"我想复查洗牙" → 选择日期 → 确认 | `recall_status` 从 `OUTREACHED` → `CONVERTED`，回写包含召回状态 |
+| 8 | Policy / Injection Block | 点击“Policy / Injection Block” → 发送已填入的越权请求 | Policy 显示 `BLOCKED`，不产生任何写 Tool Execution |
 
-自动化版本见 [验收场景测试](tests/scenarios/test_acceptance.py) 和 [召回场景测试](tests/scenarios/test_recall.py)。
+自动化版本见 [Demo Scenario 测试](tests/scenarios/test_demo_scenarios.py)、[验收场景测试](tests/scenarios/test_acceptance.py) 和 [召回场景测试](tests/scenarios/test_recall.py)。页面中的运行时间线直接读取当前 Run 的 Trace，不在前端硬编码最终结果。
+
+### 可演示故障场景
+
+最值得现场展示的是“提交成功但响应丢失”：
+
+```mermaid
+flowchart LR
+    A[Create Appointment] --> B[Clinic Core Commit]
+    B --> C[Response Timeout]
+    C --> D[UNKNOWN]
+    D --> E[Reconciliation]
+    E --> F[Query Operation]
+    F --> G[Appointment Found]
+    G --> H[SUCCESS]
+```
+
+其余场景也走同一 Agent / Policy / Tool / Gateway / State Machine 链路：Demo Controller 只改变 Mock 外部环境，不改变 Agent 决策逻辑。
 
 ---
 
@@ -529,16 +550,16 @@ python3 -m pip install '.[dev]'
 python3 -m pytest -q
 ```
 
-当前共 **122 条自动化测试**（`pytest --collect-only` 实测），覆盖：
+当前共 **126 条自动化测试**（`pytest --collect-only` 实测），覆盖：
 
 - Unit / State / Policy / Recall Eligibility（确定性，不调真实 LLM）
 - NLU Golden Cases（30 条意图+实体）
 - 跨服务 Integration（HTTP 边界、故障注入）
 - E2E / 异常场景（SPEC AC-01 至 AC-09 + Recall 场景）
 - API Contract（OpenAPI Schema、幂等重放）
-- 浏览器 E2E（10 条真实 API）
+- 浏览器 E2E（13 条真实 API）
 
-> 注意区分两个数字：上文指标表基于评测报告口径的固定 Synthetic 测试集（见 [docs/evaluation.md](docs/evaluation.md)）；122 是当前仓库自动化测试用例总数，两者统计对象不同。
+> 注意区分两个数字：上文指标表基于评测报告口径的固定 Synthetic 测试集（见 [docs/evaluation.md](docs/evaluation.md)）；126 是当前仓库自动化测试用例总数，两者统计对象不同。
 
 ### Real LLM Evaluation
 
@@ -549,17 +570,18 @@ Deterministic CI = 验证系统工程逻辑正确（不依赖网络和模型）
 Real LLM Evaluation = 测量真实模型能力和不稳定性（需要 API Key）
 ```
 
-运行真实模型评测（默认不进入 CI，无 API Key 不会导致测试失败）：
+运行真实模型评测（默认不进入 CI；它会产生 API 成本、受限流和模型波动影响）：
 
 ```bash
 export LLM_PROVIDER=deepseek
 export DEEPSEEK_API_KEY=your-key
 export DEEPSEEK_MODEL=deepseek-chat
 
-python3 -m patient_ops_agent.eval_runner
+patient-ops-eval-real
+# 等价于：python3 -m patient_ops_agent.eval_runner
 ```
 
-评测 30 条 Golden Cases（[`data/eval/llm_golden_cases.yaml`](data/eval/llm_golden_cases.yaml)），输出 JSON + Markdown 报告到 `reports/` 目录。指标包括：
+评测 30 条 Golden Cases（[`data/eval/llm_golden_cases.yaml`](data/eval/llm_golden_cases.yaml)），输出带时间戳的 JSON + Markdown 报告，并覆盖 `reports/real-llm-eval-latest.md`。指标包括：
 
 - Intent Accuracy / Entity Extraction Accuracy
 - Structured Output Valid Rate
@@ -567,7 +589,37 @@ python3 -m patient_ops_agent.eval_runner
 - Latency P50 / P95
 - 按类别分类准确率
 
+当前真实模型快照（2026-08-20，`deepseek-chat`，数据集 `llm-golden-v0.1`）：
+
+| 指标 | 结果 |
+|---|---:|
+| Intent Accuracy | **63.3%**（19/30） |
+| Entity Service Accuracy | 80.0% |
+| Entity Date Accuracy | 80.0% |
+| Entity Period Accuracy | 86.7% |
+| Structured Output Valid Rate | 86.7% |
+| Fallback Rate（UNKNOWN） | 0.0% |
+| Latency P50 / P95 | 1507.5 ms / 2231.8 ms |
+
+该快照的 Bad Cases 主要集中在歧义、召回、无效输入、边界输入和部分 Prompt Injection 结构化输出，说明真实模型结果仍需针对性迭代，不能用 100% 的确定性 CI 指标替代。
+
 > 评测结果受模型版本、网络和 Prompt 影响而波动，不外推到真实医疗生产环境。
+
+最新真实模型快照：[`reports/real-llm-eval-latest.md`](reports/real-llm-eval-latest.md)；机器可读版本：[`reports/real-llm-eval-latest.json`](reports/real-llm-eval-latest.json)。
+
+### 从 Demo 到客户现场
+
+当前 Demo 的集成边界是：
+
+```mermaid
+flowchart LR
+    A[Agent Domain] --> B[Port]
+    B --> C[Customer Adapter]
+    C --> D[HIS / CRM / Appointment System]
+    C --> E[Notification System]
+```
+
+交付时优先确认业务目标、SOP、权限、幂等、超时后的 Commit 语义、错误码和 UAT，再用 Customer Adapter 替换 Mock Clinic Core；Workflow 和 Tool Contract 保持稳定。完整方法见 [FDE Delivery Playbook](docs/delivery-playbook.md)。
 
 前端构建与 E2E：
 
@@ -605,6 +657,7 @@ patient-ops-agent/
 │   ├── architecture.md        # 技术架构设计
 │   ├── ui-spec.md             # UI / UX 设计
 │   ├── evaluation.md          # 评测报告
+│   ├── delivery-playbook.md   # FDE 从 POC 到客户现场的交付方法
 │   └── screenshots/           # 演示界面截图
 ├── data/synthetic/            # 虚构测试数据
 ├── infra/                     # PostgreSQL Migration
@@ -613,6 +666,7 @@ patient-ops-agent/
 │   ├── workflow/              # AgentWorkflow（理解路由、确认、执行、对账）
 │   ├── domain/                # 领域模型 + InMemoryStore
 │   ├── policy/                # 确定性 PolicyEngine
+│   ├── demo.py                 # one-shot DemoScenario / FailureInjector
 │   ├── gateways/              # HTTP Gateway（ClinicCore / PatientOps）
 │   ├── llm/                   # Provider Port + DeepSeek / RuleBased / Fake
 │   ├── mocks/                 # Clinic Core Mock + Patient Ops Mock

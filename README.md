@@ -2,8 +2,6 @@
 
 > 一个面向患者运营场景的 production-oriented 业务 Agent Demo：展示 LLM 如何在确定性状态机、Tool Contract、Policy、人工确认、异常恢复与交付方法约束下完成真实业务任务。
 
-**用面试语言说**：这不是只展示 Happy Path 的 Chatbot，而是一个可运行的 AI FDE / AI 应用交付工程样例——LLM 负责理解，确定性代码负责状态、权限、写操作、对账和接管；项目还沉淀了 Real LLM Evaluation 与从 Mock 到客户系统的 Delivery Playbook。
-
 > **重要边界**：本项目是工程演示，只使用虚构数据，不连接真实医疗系统，不提供医疗诊断或治疗建议，不是任何医疗机构的官方项目，不能直接作为医疗产品使用。
 
 ---
